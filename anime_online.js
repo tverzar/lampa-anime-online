@@ -4,11 +4,12 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.6.3';
+  var VERSION = '1.7.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var ANI_MEDIA = 'https://ani-media.online';
   var YUMMY_TV = 'https://yummyanime.tv';
+  var CORS_PROXY = 'https://cors.nb557.workers.dev/';
   var COMPONENT = 'anime_online';
   var KODIK_COMPONENT = 'anime_online_kodik';
 
@@ -101,10 +102,25 @@
     return network;
   }
 
+  function proxyUrl(url) {
+    try {
+      var encoded = btoa(unescape(encodeURIComponent(url)));
+      var clean = url.split('?')[0];
+      var name = clean.substring(clean.lastIndexOf('/') + 1) || 'resource';
+      name = name.replace(/\.(php|asp|aspx|jsp|jspx|cgi|pl|py|rb|env|ini|conf|config|htaccess|htpasswd|git|yml|yaml|sql)$/i, '.txt');
+      return CORS_PROXY + 'enc2/' + encodeURIComponent(encoded) + '/' + name + '?jacred.test';
+    } catch (e) { return url; }
+  }
+
   function requestText(url, success, error, headers) {
     var network = new Lampa.Reguest();
     network.timeout(15000);
-    network.native(url, success, error, false, { dataType: 'text', headers: headers || {} });
+    var options = { dataType: 'text', headers: headers || {} };
+    network.native(proxyUrl(url), success, function () {
+      network.clear();
+      network.timeout(15000);
+      network.native(url, success, error, false, options);
+    }, false, options);
     return network;
   }
 
@@ -512,6 +528,16 @@
     var cachedPlayerScript = '';
     var cachedInfoUrl = '';
 
+    function nativeRequest(url, success, error, postdata, options) {
+      network.clear();
+      network.timeout(15000);
+      network.native(proxyUrl(url), success, function () {
+        network.clear();
+        network.timeout(15000);
+        network.native(url, success, error, postdata || false, options);
+      }, postdata || false, options);
+    }
+
     function absolute(url, origin) {
       if (!url) return '';
       if (url.indexOf('//') === 0) return 'https:' + url;
@@ -534,9 +560,7 @@
       var url = absolute(playerLink, '');
       var originMatch = url.match(/^(https?:\/\/[^/]+)/);
       var origin = originMatch ? originMatch[1] : 'https://kodikplayer.com';
-      network.clear();
-      network.timeout(15000);
-      network.native(url, function (html) {
+      nativeRequest(url, function (html) {
         html = String(html || '').replace(/\n/g, '');
         var paramsMatch = html.match(/\burlParams = '([^']+)'/);
         var type = html.match(/\b(?:videoInfo|vInfo)\.type = '([^']+)'/);
@@ -558,9 +582,7 @@
         var scriptUrl = origin + script[1];
 
         function getLinks() {
-          network.clear();
-          network.timeout(15000);
-          network.native(cachedInfoUrl, function (json) {
+          nativeRequest(cachedInfoUrl, function (json) {
             if (typeof json === 'string') {
               try { json = JSON.parse(json); } catch (e) { json = null; }
             }
@@ -583,8 +605,7 @@
         }
 
         if (cachedPlayerScript === scriptUrl && cachedInfoUrl) return getLinks();
-        network.clear();
-        network.native(scriptUrl, function (scriptText) {
+        nativeRequest(scriptUrl, function (scriptText) {
           var info = String(scriptText || '').replace(/\n/g, '').match(/\$\.ajax\(\{type:\s*["']POST["'],\s*url:\s*atob\(["']([^"']+)["']\)/);
           try { cachedInfoUrl = info && absolute(atob(info[1]), origin); } catch (e) { cachedInfoUrl = ''; }
           if (!cachedInfoUrl) return error();
