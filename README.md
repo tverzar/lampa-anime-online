@@ -15,8 +15,7 @@
 Откройте в Lampa раздел добавления плагина и укажите прямую ссылку:
 
 ```text
-https://raw.githubusercontent.com/tverzar/lampa-anime-online/main/anime_online.js
+https://tverzar.github.io/lampa-anime-online/anime_online.js
 ```
 
 Для AniLibria, Ani-Media и YummyAnime.TV отдельный токен не требуется. Токены Kodik и YummyAnime при необходимости задаются в настройках плагина.
-
