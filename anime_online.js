@@ -4,9 +4,8 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.4.0';
+  var VERSION = '1.5.0';
   var API = 'https://anilibria.top/api/v1';
-  var KODIK_API = 'https://kodik-api.com/search';
   var YUMMY_API = 'https://api.yani.tv';
   var ANI_MEDIA = 'https://ani-media.online';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -90,51 +89,6 @@
       Lampa.Loading.stop();
       Lampa.Noty.show('Аниме не найдено в AniLibria');
     });
-  }
-
-  function openKodik(movie) {
-    var token = String(Lampa.Storage.get('anime_online_kodik_token', '') || '').trim();
-    if (!token) {
-      Lampa.Noty.show('Укажите личный токен Kodik в настройках «Аниме онлайн»');
-      return;
-    }
-    var query = queryFor(movie);
-    if (!query) return Lampa.Noty.show('Не удалось определить название');
-    Lampa.Loading.start();
-    requestKodik('?token=' + encodeURIComponent(token) + '&limit=100&with_episodes=true&title=' + encodeURIComponent(query), function (json) {
-      Lampa.Loading.stop();
-      var results = json && Array.isArray(json.results) ? json.results : [];
-      if (!results.length) return Lampa.Noty.show('Аниме не найдено в Kodik');
-      var choices = results.slice(0, 50).map(function (item) {
-        var labels = [];
-        if (item.year) labels.push(item.year);
-        if (item.translation && item.translation.title) labels.push(item.translation.title);
-        if (item.quality) labels.push(item.quality);
-        return { title: item.title || item.title_orig || 'Без названия', subtitle: labels.join(' · '), material: item };
-      });
-      Lampa.Select.show({
-        title: 'Kodik: релиз и озвучка',
-        items: choices,
-        onBack: function () { Lampa.Controller.toggle('content'); },
-        onSelect: function (choice) {
-          Lampa.Activity.push({
-            url: '', title: choice.title, component: KODIK_COMPONENT,
-            material: choice.material, movie: movie
-          });
-        }
-      });
-    }, function () {
-      Lampa.Loading.stop();
-      Lampa.Noty.show('Ошибка запроса Kodik');
-    });
-  }
-
-  function requestKodik(path, success, error, postdata, asText) {
-    var network = new Lampa.Reguest();
-    network.timeout(15000);
-    network.native((path.indexOf('http') === 0 ? '' : KODIK_API) + path, success, error, postdata || false,
-      asText ? { dataType: 'text' } : undefined);
-    return network;
   }
 
   function requestYummy(path, success, error) {
@@ -361,15 +315,13 @@
       title: 'Источник аниме',
       items: [
         { title: 'AniLibria', subtitle: 'Без токена · прямые HLS-потоки', source: 'anilibria' },
-        { title: 'Kodik', subtitle: 'Разные озвучки · требуется личный токен', source: 'kodik' },
         { title: 'YummyAnime', subtitle: 'Каталог и озвучки · требуется токен приложения', source: 'yummy' },
         { title: 'Ani-Media', subtitle: 'Без токена · каталог и серии через Kodik', source: 'animedia' },
         { title: 'YummyAnime.TV', subtitle: 'Без токена · каталог и серии через Kodik', source: 'yummytv' }
       ],
       onBack: function () { Lampa.Controller.toggle('content'); },
       onSelect: function (item) {
-        if (item.source === 'kodik') openKodik(movie);
-        else if (item.source === 'yummy') openYummy(movie);
+        if (item.source === 'yummy') openYummy(movie);
         else if (item.source === 'animedia') openAniMedia(movie);
         else if (item.source === 'yummytv') openYummyTv(movie);
         else openAniLibria(movie);
@@ -673,7 +625,7 @@
     var root = event.object.activity.render();
     if (root.find('.view--anime-online').length) return;
 
-    var button = $('<div class="full-start__button selector view--anime-online" data-subtitle="5 источников · ' + VERSION + '">' +
+    var button = $('<div class="full-start__button selector view--anime-online" data-subtitle="4 источника · ' + VERSION + '">' +
       '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>' +
       '<span>Аниме онлайн</span>' +
     '</div>');
@@ -685,14 +637,8 @@
   }
 
   function addSettings() {
-    Lampa.Params.select('anime_online_kodik_token', '', '');
     Lampa.Params.select('anime_online_yummy_token', '', '');
     Lampa.Template.add('settings_anime_online', '<div>' +
-      '<div class="settings-param selector" data-name="anime_online_kodik_token" data-type="input" data-string="true" placeholder="Личный API-токен">' +
-        '<div class="settings-param__name">Токен Kodik</div>' +
-        '<div class="settings-param__value"></div>' +
-        '<div class="settings-param__descr">Нужен только для источника Kodik; хранится локально в Lampa</div>' +
-      '</div>' +
       '<div class="settings-param selector" data-name="anime_online_yummy_token" data-type="input" data-string="true" placeholder="X-Application token">' +
         '<div class="settings-param__name">Токен приложения YummyAnime</div>' +
         '<div class="settings-param__value"></div>' +
@@ -719,10 +665,10 @@
     type: 'video',
     version: VERSION,
     name: 'Аниме онлайн — ' + VERSION,
-    description: 'Просмотр аниме через AniLibria, Kodik, YummyAnime, Ani-Media и YummyAnime.TV',
+    description: 'Просмотр аниме через AniLibria, YummyAnime, Ani-Media и YummyAnime.TV',
     component: COMPONENT,
     onContextMenu: function () {
-      return { name: 'Аниме онлайн', description: 'AniLibria + Kodik + YummyAnime + Ani-Media + YummyAnime.TV' };
+      return { name: 'Аниме онлайн', description: 'AniLibria + YummyAnime + Ani-Media + YummyAnime.TV' };
     },
     onContextLauch: function (movie) { openAnime(movie); }
   };

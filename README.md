@@ -5,7 +5,6 @@
 Источники:
 
 - AniLibria
-- Kodik
 - YummyAnime
 - Ani-Media
 - YummyAnime.TV
@@ -18,4 +17,4 @@
 https://tverzar.github.io/lampa-anime-online/anime_online.js
 ```
 
-Для AniLibria, Ani-Media и YummyAnime.TV отдельный токен не требуется. Токены Kodik и YummyAnime при необходимости задаются в настройках плагина.
+Для AniLibria, Ani-Media и YummyAnime.TV отдельный токен не требуется. Токен приложения YummyAnime при необходимости задаётся в настройках плагина.
