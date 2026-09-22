@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.5.0';
+  var VERSION = '1.6.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var ANI_MEDIA = 'https://ani-media.online';
@@ -158,14 +158,42 @@
     });
   }
 
-  function openCatalogKodik(choice, movie, playerUrl, sourceName) {
+  function openCatalogKodik(choice, movie, playerUrl, sourceName, voiceName, voiceChosen) {
     requestText(playerUrl, function (playerHtml) {
+      var rawPlayerHtml = String(playerHtml || '');
+      var origin = (playerUrl.match(/^(https?:\/\/[^/]+)/) || [])[1] || 'https://kodikplayer.com';
+      var translations = [];
+      var translationsBlock = rawPlayerHtml.match(/<div class="(?:serial-)?translations-box">[\s\S]*?<select>([\s\S]*?)<\/select>/i);
+      if (translationsBlock) {
+        var translationRe = /<option[\s\S]*?data-translation-type="([^"]+)"[\s\S]*?data-media-id="([^"]+)"[\s\S]*?data-media-hash="([^"]+)"[\s\S]*?data-media-type="([^"]+)"[\s\S]*?data-title="([^"]+)"[\s\S]*?data-episode-count="([^"]*)"[\s\S]*?>/gi;
+        var translationMatch;
+        while ((translationMatch = translationRe.exec(translationsBlock[1]))) {
+          translations.push({
+            title: htmlValue(translationMatch[5]),
+            subtitle: (translationMatch[1] === 'subtitles' ? 'Субтитры' : 'Озвучка') +
+              (translationMatch[6] ? ' · серии ' + translationMatch[6] : ''),
+            player: origin + '/' + translationMatch[4] + '/' + translationMatch[2] + '/' + translationMatch[3] + '/720p'
+          });
+        }
+      }
+      if (!voiceChosen && translations.length > 1) {
+        Lampa.Loading.stop();
+        return Lampa.Select.show({
+          title: sourceName + ': выберите озвучку',
+          items: translations,
+          onBack: function () { Lampa.Controller.toggle('content'); },
+          onSelect: function (translation) {
+            Lampa.Loading.start();
+            openCatalogKodik(choice, movie, translation.player, sourceName, translation.title, true);
+          }
+        });
+      }
       Lampa.Loading.stop();
-      var material = { title: choice.title, link: playerUrl, translation: { title: sourceName } };
+      var material = { title: choice.title, link: playerUrl, translation: { title: voiceName || sourceName } };
       var seasons = {};
       var seasonRe = /<div class="season-([^\"]+)">([\s\S]*?)(?=<\/div>)/gi;
       var seasonMatch;
-      while ((seasonMatch = seasonRe.exec(String(playerHtml || '')))) {
+      while ((seasonMatch = seasonRe.exec(rawPlayerHtml))) {
         var episodes = {};
         var episodeRe = /<option[\s\S]*?value="([^"]+)"[\s\S]*?data-id="([^"]+)"[\s\S]*?data-hash="([^"]+)"[\s\S]*?>/gi;
         var episodeMatch;
@@ -431,7 +459,7 @@
     }
 
     this.create = function () {
-      files.append(scroll.render());
+      files.appendFiles(scroll.render());
       load();
     };
 
@@ -591,7 +619,7 @@
     }
 
     this.create = function () {
-      files.append(scroll.render());
+      files.appendFiles(scroll.render());
       var rows = flatten(object.material || {});
       if (!rows.length) {
         var empty = Lampa.Template.get('list_empty');
