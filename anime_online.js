@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.6.0';
+  var VERSION = '1.6.1';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var ANI_MEDIA = 'https://ani-media.online';
@@ -537,7 +537,8 @@
         var type = html.match(/\b(?:videoInfo|vInfo)\.type = '([^']+)'/);
         var hash = html.match(/\b(?:videoInfo|vInfo)\.hash = '([^']+)'/);
         var id = html.match(/\b(?:videoInfo|vInfo)\.id = '([^']+)'/);
-        var script = html.match(/<script [^>]*\bsrc="(\/assets\/js\/app\.player_single[^"]+)"/);
+        var script = html.match(/<script[^>]*\bsrc=["'](\/assets\/js\/app\.(?:serial|single)\.[^"']+)["']/i) ||
+          html.match(/<script[^>]*\bsrc=["'](\/assets\/js\/app\.player_single[^"']+)["']/i);
         var params;
         try { params = paramsMatch && JSON.parse(paramsMatch[1]); } catch (e) {}
         if (!params || !type || !hash || !id || !script) return error();
@@ -571,7 +572,7 @@
         if (cachedPlayerScript === scriptUrl && cachedInfoUrl) return getLinks();
         network.clear();
         network.native(scriptUrl, function (scriptText) {
-          var info = String(scriptText || '').replace(/\n/g, '').match(/\$\.ajax\({type: *"POST", *url: *atob\("([^"]+)"\)/);
+          var info = String(scriptText || '').replace(/\n/g, '').match(/\$\.ajax\(\{type:\s*["']POST["'],\s*url:\s*atob\(["']([^"']+)["']\)/);
           try { cachedInfoUrl = info && absolute(atob(info[1]), origin); } catch (e) { cachedInfoUrl = ''; }
           if (!cachedInfoUrl) return error();
           cachedPlayerScript = scriptUrl;
