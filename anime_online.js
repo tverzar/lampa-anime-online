@@ -4,12 +4,12 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.7.0';
+  var VERSION = '1.8.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var ANI_MEDIA = 'https://ani-media.online';
   var YUMMY_TV = 'https://yummyanime.tv';
-  var CORS_PROXY = 'https://cors.nb557.workers.dev/';
+  var CORS_PROXY = 'https://lampa-anime-proxy.rammthaok.workers.dev/proxy?url=';
   var COMPONENT = 'anime_online';
   var KODIK_COMPONENT = 'anime_online_kodik';
 
@@ -96,20 +96,14 @@
     var token = String(Lampa.Storage.get('anime_online_yummy_token', '') || '').trim();
     var network = new Lampa.Reguest();
     network.timeout(15000);
-    network.native(YUMMY_API + path, success, error, false, {
+    network.native(proxyUrl(YUMMY_API + path), success, error, false, {
       headers: { 'X-Application': token, 'Lang': 'ru', 'Accept': 'application/json' }
     });
     return network;
   }
 
   function proxyUrl(url) {
-    try {
-      var encoded = btoa(unescape(encodeURIComponent(url)));
-      var clean = url.split('?')[0];
-      var name = clean.substring(clean.lastIndexOf('/') + 1) || 'resource';
-      name = name.replace(/\.(php|asp|aspx|jsp|jspx|cgi|pl|py|rb|env|ini|conf|config|htaccess|htpasswd|git|yml|yaml|sql)$/i, '.txt');
-      return CORS_PROXY + 'enc2/' + encodeURIComponent(encoded) + '/' + name + '?jacred.test';
-    } catch (e) { return url; }
+    return CORS_PROXY + encodeURIComponent(url);
   }
 
   function requestText(url, success, error, headers) {
