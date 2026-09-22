@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.6.2';
+  var VERSION = '1.6.3';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var ANI_MEDIA = 'https://ani-media.online';
@@ -561,6 +561,9 @@
           network.clear();
           network.timeout(15000);
           network.native(cachedInfoUrl, function (json) {
+            if (typeof json === 'string') {
+              try { json = JSON.parse(json); } catch (e) { json = null; }
+            }
             if (!json || !json.links) return error();
             var quality = {};
             Object.keys(json.links).forEach(function (key) {
@@ -571,7 +574,12 @@
             var keys = Object.keys(quality).sort(function (a, b) { return parseInt(b) - parseInt(a); });
             if (!keys.length) return error();
             success({ url: quality[keys[0]], quality: quality });
-          }, error, post);
+          }, error, post, {
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+              'Accept': 'application/json'
+            }
+          });
         }
 
         if (cachedPlayerScript === scriptUrl && cachedInfoUrl) return getLinks();
