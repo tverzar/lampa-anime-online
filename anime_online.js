@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.6.1';
+  var VERSION = '1.6.2';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var ANI_MEDIA = 'https://ani-media.online';
@@ -281,6 +281,11 @@
       Lampa.Loading.stop();
       var items = json && Array.isArray(json.response) ? json.response : [];
       if (!items.length) return Lampa.Noty.show('Аниме не найдено в YummyAnime');
+      items = items.slice().sort(function (a, b) {
+        var yearA = parseInt(a && a.year, 10) || 0;
+        var yearB = parseInt(b && b.year, 10) || 0;
+        return yearB - yearA;
+      });
       Lampa.Select.show({
         title: 'YummyAnime: выберите релиз',
         items: items.map(function (item) {
