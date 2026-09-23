@@ -26,5 +26,3 @@ https://tverzar.github.io/lampa-anime-online/anime_online.js
 ```text
 https://lampa-anime-proxy.rammthaok.workers.dev/proxy
 ```
-
-Чтобы обновить Worker, выполните `npx wrangler deploy` из этой папки после входа в Cloudflare через Wrangler.
