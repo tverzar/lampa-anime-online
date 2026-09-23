@@ -22,7 +22,3 @@ https://tverzar.github.io/lampa-anime-online/anime_online.js
 ## Прокси Cloudflare
 
 `worker.js` — CORS-прокси для работы плагина на Apple TV. Он принимает запросы только к Ani-Media, YummyAnime, YummyAnime.TV и доменам Kodik. Адрес Worker:
-
-```text
-https://lampa-anime-proxy.rammthaok.workers.dev/proxy
-```
