@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.8.0';
+  var VERSION = '1.9.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var ANI_MEDIA = 'https://ani-media.online';
@@ -32,6 +32,14 @@
     return movie.title || movie.name || movie.original_title || movie.original_name || '';
   }
 
+  function seriesCountLabel(count) {
+    count = parseInt(count, 10) || 0;
+    var lastTwo = count % 100;
+    var last = count % 10;
+    var word = lastTwo >= 11 && lastTwo <= 14 ? 'серий' : last === 1 ? 'серию' : last >= 2 && last <= 4 ? 'серии' : 'серий';
+    return count + ' ' + word;
+  }
+
   function findReleases(movie, success, error) {
     var variants = [];
     [movie.title, movie.name, movie.original_title, movie.original_name].forEach(function (value) {
@@ -55,9 +63,10 @@
       var labels = [];
       if (item.year) labels.push(item.year);
       if (item.type && item.type.description) labels.push(item.type.description);
-      if (item.episodes_total) labels.push(item.episodes_total + ' эп.');
+      var title = item.name && item.name.main || 'Без названия';
+      if (item.episodes_total) title += ' (' + seriesCountLabel(item.episodes_total) + ')';
       return {
-        title: item.name && item.name.main || 'Без названия',
+        title: title,
         subtitle: labels.join(' · '),
         release: item
       };
@@ -179,14 +188,13 @@
         var translationMatch;
         while ((translationMatch = translationRe.exec(translationsBlock[1]))) {
           translations.push({
-            title: htmlValue(translationMatch[5]),
-            subtitle: (translationMatch[1] === 'subtitles' ? 'Субтитры' : 'Озвучка') +
-              (translationMatch[6] ? ' · серии ' + translationMatch[6] : ''),
+            title: htmlValue(translationMatch[5]) + (translationMatch[6] ? ' (' + seriesCountLabel(translationMatch[6]) + ')' : ''),
+            subtitle: translationMatch[1] === 'subtitles' ? 'Субтитры' : 'Озвучка',
             player: origin + '/' + translationMatch[4] + '/' + translationMatch[2] + '/' + translationMatch[3] + '/720p'
           });
         }
       }
-      if (!voiceChosen && translations.length > 1) {
+      if (!voiceChosen && translations.length) {
         Lampa.Loading.stop();
         return Lampa.Select.show({
           title: sourceName + ': выберите озвучку',
@@ -325,28 +333,62 @@
         return /kodik/i.test(player) || /kodik|aniqit/i.test(video.iframe_url || '');
       });
       if (!videos.length) return Lampa.Noty.show('В этом релизе нет совместимых потоков Kodik');
-      Lampa.Select.show({
-        title: 'YummyAnime: серия и озвучка',
-        items: videos.map(function (video) {
-          return {
-            title: 'Серия ' + (video.number || video.index || '?'),
-            subtitle: [video.data && video.data.dubbing, video.data && video.data.player].filter(Boolean).join(' · '),
-            video: video
-          };
-        }),
-        onBack: function () { Lampa.Controller.toggle('content'); },
-        onSelect: function (choice) {
-          var video = choice.video;
-          Lampa.Activity.push({
-            url: '', title: detail.title || anime.title, component: KODIK_COMPONENT,
-            material: {
-              title: detail.title || anime.title,
-              link: video.iframe_url,
-              translation: { title: video.data && video.data.dubbing || 'YummyAnime' }
-            }, movie: movie
-          });
-        }
+      var voices = {};
+      videos.forEach(function (video) {
+        var name = String(video.data && video.data.dubbing || 'Озвучка не указана').trim();
+        var key = name.toLocaleLowerCase();
+        if (!voices[key]) voices[key] = { name: name, videos: {}, player: video.data && video.data.player || '' };
+        var number = video.number != null ? String(video.number) : video.index != null ? String(video.index) : String(Object.keys(voices[key].videos).length + 1);
+        if (!voices[key].videos[number] || (!voices[key].videos[number].iframe_url && video.iframe_url)) voices[key].videos[number] = video;
       });
+      var voiceChoices = Object.keys(voices).map(function (key) {
+        var voice = voices[key];
+        var count = Object.keys(voice.videos).length;
+        return {
+          title: voice.name + ' (' + seriesCountLabel(count) + ')',
+          subtitle: voice.player || 'YummyAnime',
+          voice: voice
+        };
+      });
+      function showVoices() {
+        Lampa.Select.show({
+          title: 'YummyAnime: выберите озвучку',
+          items: voiceChoices,
+          onBack: function () { Lampa.Controller.toggle('content'); },
+          onSelect: function (choice) { showEpisodes(choice.voice); }
+        });
+      }
+
+      function showEpisodes(voice) {
+        var episodes = Object.keys(voice.videos).sort(function (a, b) {
+          var numberA = parseFloat(a);
+          var numberB = parseFloat(b);
+          if (!isNaN(numberA) && !isNaN(numberB)) return numberA - numberB;
+          return a.localeCompare(b, 'ru');
+        }).map(function (number) {
+          return { number: number, video: voice.videos[number] };
+        });
+        Lampa.Select.show({
+          title: 'YummyAnime: выберите серию',
+          items: episodes.map(function (episode) {
+            return { title: 'Серия ' + episode.number, subtitle: voice.name, video: episode.video };
+          }),
+          onBack: showVoices,
+          onSelect: function (episode) {
+            var video = episode.video;
+            Lampa.Activity.push({
+              url: '', title: detail.title || anime.title, component: KODIK_COMPONENT,
+              material: {
+                title: detail.title || anime.title,
+                link: video.iframe_url,
+                translation: { title: voice.name }
+              }, movie: movie
+            });
+          }
+        });
+      }
+
+      showVoices();
     }, function () {
       Lampa.Loading.stop();
       Lampa.Noty.show('Не удалось получить серии YummyAnime');
