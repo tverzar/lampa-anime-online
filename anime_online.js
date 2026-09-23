@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.9.0';
+  var VERSION = '1.10.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var ANI_MEDIA = 'https://ani-media.online';
@@ -38,6 +38,16 @@
     var last = count % 10;
     var word = lastTwo >= 11 && lastTwo <= 14 ? 'серий' : last === 1 ? 'серию' : last >= 2 && last <= 4 ? 'серии' : 'серий';
     return count + ' ' + word;
+  }
+
+  function episodeTimeline(movie, season, episode) {
+    var episodeNumber = Number(episode);
+    if (!movie || !isFinite(episodeNumber) || episodeNumber < 1 || !Lampa.Timeline || !Lampa.Timeline.watchedEpisode) return null;
+    try {
+      return Lampa.Timeline.watchedEpisode(movie, Number(season) || 1, episodeNumber, true);
+    } catch (e) {
+      return null;
+    }
   }
 
   function findReleases(movie, success, error) {
@@ -381,6 +391,8 @@
               material: {
                 title: detail.title || anime.title,
                 link: video.iframe_url,
+                season: 1,
+                episode: video.number != null ? video.number : video.index,
                 translation: { title: voice.name }
               }, movie: movie
             });
@@ -436,13 +448,16 @@
 
     function makePlaylist(episodes) {
       return episodes.map(function (episode) {
-        var number = episode.ordinal == null ? '?' : episode.ordinal;
+        var number = episode.ordinal == null ? '' : episode.ordinal;
+        var label = number === '' ? '?' : number;
         return {
           url: bestUrl(episode),
-          title: (release.name && release.name.main || 'Аниме') + ' — серия ' + number,
+          title: (release.name && release.name.main || 'Аниме') + ' — серия ' + label,
           quality: qualityMap(episode),
           season: 1,
-          episode: number
+          episode: number || undefined,
+          card: object.movie,
+          timeline: episodeTimeline(object.movie, 1, number)
         };
       }).filter(function (entry) {
         return !!entry.url;
@@ -453,13 +468,16 @@
       var url = bestUrl(episode);
       if (!url) return Lampa.Noty.show('Для этой серии нет видеопотока');
 
-      var number = episode.ordinal == null ? '?' : episode.ordinal;
+      var number = episode.ordinal == null ? '' : episode.ordinal;
+      var label = number === '' ? '?' : number;
       var entry = {
         url: url,
-        title: (release.name && release.name.main || 'Аниме') + ' — серия ' + number,
+        title: (release.name && release.name.main || 'Аниме') + ' — серия ' + label,
         quality: qualityMap(episode),
         season: 1,
-        episode: number
+        episode: number || undefined,
+        card: object.movie,
+        timeline: episodeTimeline(object.movie, 1, number)
       };
       entry.playlist = playlist;
       Lampa.Player.play(entry);
@@ -660,7 +678,11 @@
             rows.push({ season: season, episode: episode, link: episodes[episode] });
           });
         });
-      } else if (material.link) rows.push({ season: '', episode: '', link: material.link });
+      } else if (material.link) rows.push({
+        season: material.season || 1,
+        episode: material.episode == null ? '' : material.episode,
+        link: material.link
+      });
       return rows;
     }
 
@@ -669,7 +691,15 @@
       extractStreams(row.link, function (stream) {
         Lampa.Loading.stop();
         var label = row.episode ? 'Сезон ' + row.season + ' · серия ' + row.episode : object.material.title;
-        var entry = { url: stream.url, quality: stream.quality, title: label };
+        var entry = {
+          url: stream.url,
+          quality: stream.quality,
+          title: label,
+          card: object.movie,
+          season: row.season || 1,
+          episode: row.episode || undefined,
+          timeline: episodeTimeline(object.movie, row.season || 1, row.episode)
+        };
         Lampa.Player.play(entry);
         Lampa.Player.playlist([entry]);
       }, function () {
