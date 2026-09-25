@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.12.0';
+  var VERSION = '1.12.1';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -85,7 +85,7 @@
         '<div class="anime-online-frame__button selector anime-online-frame__close">Назад</div>' +
       '</div>' +
       '<div class="anime-online-frame__body">' +
-        '<iframe class="anime-online-frame__window" allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture" frameborder="0" scrolling="no"></iframe>' +
+        '<iframe class="anime-online-frame__window" referrerpolicy="unsafe-url" allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture" frameborder="0" scrolling="no"></iframe>' +
       '</div>' +
     '</div>');
 
