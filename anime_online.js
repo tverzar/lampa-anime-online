@@ -4,28 +4,28 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.10.0';
+  var VERSION = '1.11.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
-  var ANI_MEDIA = 'https://ani-media.online';
   var YUMMY_TV = 'https://yummyanime.tv';
   var CORS_PROXY = 'https://lampa-anime-proxy.rammthaok.workers.dev/proxy?url=';
   var COMPONENT = 'anime_online';
-  var KODIK_COMPONENT = 'anime_online_kodik';
+  var FRAME_CONTROLLER = 'anime_online_frame';
+  var FRAME_STYLE = 'anime_online_frame_style';
 
   function text(value) {
     return $('<div>').text(value == null ? '' : String(value)).html();
   }
 
-  function request(path, success, error) {
-    var network = new Lampa.Reguest();
-    network.timeout(15000);
-    network.silent(API + path, function (data) {
-      success(data);
-    }, function () {
-      if (error) error();
-    });
-    return network;
+  function proxyUrl(url) {
+    return CORS_PROXY + encodeURIComponent(url);
+  }
+
+  function absolute(url) {
+    if (!url) return '';
+    if (url.indexOf('//') === 0) return 'https:' + url;
+    if (url.indexOf('/') === 0) return 'https://kodikplayer.com' + url;
+    return url;
   }
 
   function queryFor(movie) {
@@ -48,6 +48,95 @@
     } catch (e) {
       return null;
     }
+  }
+
+  /* -------------------------------------------------------------------- */
+  /* Полноэкранное окно с плеером Kodik.                                   */
+  /*                                                                       */
+  /* Прямые потоки из Kodik извлечь нельзя: kodikplayer.com не отдаёт       */
+  /* CORS-заголовки (прямой XHR из Lampa режется браузером), а через        */
+  /* CORS-прокси его эндпоинт /ftor отвечает 500. Поэтому плеер Kodik       */
+  /* открывается как iframe — iframe не подчиняется CORS.                   */
+  /* -------------------------------------------------------------------- */
+
+  function frameStyles() {
+    if ($('#' + FRAME_STYLE).length) return;
+    var css = '' +
+      '.anime-online-frame{position:fixed;top:0;right:0;bottom:0;left:0;z-index:200;background:#000;display:flex;flex-direction:column;}' +
+      '.anime-online-frame__bar{display:flex;align-items:center;padding:.5em 1em;background:rgba(0,0,0,.9);z-index:3;}' +
+      '.anime-online-frame__title{flex:1;font-size:1.1em;color:#fff;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;padding-right:1em;}' +
+      '.anime-online-frame__button{margin-left:.6em;padding:.4em 1.1em;border-radius:.4em;background:rgba(255,255,255,.14);color:#fff;font-size:1em;white-space:nowrap;transition:background .15s,color .15s;}' +
+      '.anime-online-frame__button.focus{background:#fff;color:#000;}' +
+      '.anime-online-frame__body{flex:1;position:relative;background:#000;}' +
+      '.anime-online-frame__window{position:absolute;top:0;left:0;width:100%;height:100%;border:0;background:#000;}';
+    $('head').append($('<style id="' + FRAME_STYLE + '"></style>').text(css));
+  }
+
+  function showFrame(url, title, onBack) {
+    var link = absolute(url);
+    if (!link) return Lampa.Noty.show('Не удалось получить ссылку на плеер');
+
+    frameStyles();
+
+    var html = $('<div class="anime-online-frame">' +
+      '<div class="anime-online-frame__bar">' +
+        '<div class="anime-online-frame__title"></div>' +
+        '<div class="anime-online-frame__button selector anime-online-frame__player">В плеер</div>' +
+        '<div class="anime-online-frame__button selector anime-online-frame__close">Назад</div>' +
+      '</div>' +
+      '<div class="anime-online-frame__body">' +
+        '<iframe class="anime-online-frame__window" allowfullscreen allow="autoplay; fullscreen; encrypted-media; picture-in-picture" frameborder="0" scrolling="no"></iframe>' +
+      '</div>' +
+    '</div>');
+
+    html.find('.anime-online-frame__title').text(title || 'Аниме онлайн');
+    html.find('.anime-online-frame__window').attr('src', link);
+    $('body').append(html);
+
+    var closed = false;
+    function close() {
+      if (closed) return;
+      closed = true;
+      html.find('.anime-online-frame__window').attr('src', 'about:blank');
+      html.remove();
+      if (onBack) onBack();
+    }
+
+    function focusPlayer() {
+      var frame = html.find('.anime-online-frame__window')[0];
+      if (frame) frame.focus();
+    }
+
+    html.find('.anime-online-frame__close').on('hover:enter', close).on('click', close);
+    html.find('.anime-online-frame__player').on('hover:enter', focusPlayer).on('click', focusPlayer);
+
+    Lampa.Controller.add(FRAME_CONTROLLER, {
+      toggle: function () {
+        Lampa.Controller.collectionSet(html);
+        Lampa.Controller.collectionFocus(html.find('.anime-online-frame__close')[0], html);
+      },
+      up: function () {},
+      down: function () {},
+      left: function () {},
+      right: function () {},
+      back: close
+    });
+    Lampa.Controller.toggle(FRAME_CONTROLLER);
+  }
+
+  /* -------------------------------------------------------------------- */
+  /* AniLibria — прямые HLS-потоки, без прокси и токена                    */
+  /* -------------------------------------------------------------------- */
+
+  function request(path, success, error) {
+    var network = new Lampa.Reguest();
+    network.timeout(15000);
+    network.silent(API + path, function (data) {
+      success(data);
+    }, function () {
+      if (error) error();
+    });
+    return network;
   }
 
   function findReleases(movie, success, error) {
@@ -111,19 +200,10 @@
     });
   }
 
-  function requestYummy(path, success, error) {
-    var token = String(Lampa.Storage.get('anime_online_yummy_token', '') || '').trim();
-    var network = new Lampa.Reguest();
-    network.timeout(15000);
-    network.native(proxyUrl(YUMMY_API + path), success, error, false, {
-      headers: { 'X-Application': token, 'Lang': 'ru', 'Accept': 'application/json' }
-    });
-    return network;
-  }
-
-  function proxyUrl(url) {
-    return CORS_PROXY + encodeURIComponent(url);
-  }
+  /* -------------------------------------------------------------------- */
+  /* Транспорт для HTML/JSON источников: сначала CORS-прокси, при неудаче  */
+  /* — прямой запрос.                                                      */
+  /* -------------------------------------------------------------------- */
 
   function requestText(url, success, error, headers) {
     var network = new Lampa.Reguest();
@@ -141,106 +221,9 @@
     return $('<textarea>').html(value || '').text().trim();
   }
 
-  function openAniMedia(movie) {
-    var query = queryFor(movie);
-    if (!query) return Lampa.Noty.show('Не удалось определить название');
-    Lampa.Loading.start();
-    var url = ANI_MEDIA + '/index.php?do=search&subaction=search&story=' + encodeURIComponent(query);
-    requestText(url, function (html) {
-      Lampa.Loading.stop();
-      var block = String(html || '').split('<!-- DLE Search by https://lazydev.pro -->');
-      block = block.length > 2 ? block[1] : String(html || '');
-      var found = [];
-      var seen = {};
-      var re = /<a\s+href="([^"]+)"\s+class="new-anime__link"\s+title="([^"]+)"[\s\S]*?<span class="new-anime__series">([\s\S]*?)<\/span>/gi;
-      var match;
-      while ((match = re.exec(block))) {
-        if (seen[match[1]]) continue;
-        seen[match[1]] = true;
-        found.push({ title: htmlValue(match[2]), subtitle: htmlValue(match[3]), url: match[1] });
-      }
-      if (!found.length) return Lampa.Noty.show('Аниме не найдено на Ani-Media');
-      Lampa.Select.show({
-        title: 'Ani-Media: выберите релиз', items: found,
-        onBack: function () { Lampa.Controller.toggle('content'); },
-        onSelect: function (choice) { openAniMediaRelease(choice, movie); }
-      });
-    }, function () {
-      Lampa.Loading.stop();
-      Lampa.Noty.show('Не удалось выполнить поиск на Ani-Media');
-    });
-  }
-
-  function openAniMediaRelease(choice, movie) {
-    Lampa.Loading.start();
-    requestText(choice.url, function (html) {
-      var iframe = String(html || '').match(/<iframe[^>]+(?:data-src|src)="((?:https?:)?\/\/[^\"]*kodik[^\"]+)"/i);
-      if (!iframe) {
-        Lampa.Loading.stop();
-        return Lampa.Noty.show('У релиза нет совместимого плеера Kodik');
-      }
-      var playerUrl = iframe[1].indexOf('//') === 0 ? 'https:' + iframe[1] : iframe[1];
-      openCatalogKodik(choice, movie, playerUrl, 'Ani-Media');
-    }, function () {
-      Lampa.Loading.stop();
-      Lampa.Noty.show('Не удалось открыть релиз Ani-Media');
-    });
-  }
-
-  function openCatalogKodik(choice, movie, playerUrl, sourceName, voiceName, voiceChosen) {
-    requestText(playerUrl, function (playerHtml) {
-      var rawPlayerHtml = String(playerHtml || '');
-      var origin = (playerUrl.match(/^(https?:\/\/[^/]+)/) || [])[1] || 'https://kodikplayer.com';
-      var translations = [];
-      var translationsBlock = rawPlayerHtml.match(/<div class="(?:serial-)?translations-box">[\s\S]*?<select>([\s\S]*?)<\/select>/i);
-      if (translationsBlock) {
-        var translationRe = /<option[\s\S]*?data-translation-type="([^"]+)"[\s\S]*?data-media-id="([^"]+)"[\s\S]*?data-media-hash="([^"]+)"[\s\S]*?data-media-type="([^"]+)"[\s\S]*?data-title="([^"]+)"[\s\S]*?data-episode-count="([^"]*)"[\s\S]*?>/gi;
-        var translationMatch;
-        while ((translationMatch = translationRe.exec(translationsBlock[1]))) {
-          translations.push({
-            title: htmlValue(translationMatch[5]) + (translationMatch[6] ? ' (' + seriesCountLabel(translationMatch[6]) + ')' : ''),
-            subtitle: translationMatch[1] === 'subtitles' ? 'Субтитры' : 'Озвучка',
-            player: origin + '/' + translationMatch[4] + '/' + translationMatch[2] + '/' + translationMatch[3] + '/720p'
-          });
-        }
-      }
-      if (!voiceChosen && translations.length) {
-        Lampa.Loading.stop();
-        return Lampa.Select.show({
-          title: sourceName + ': выберите озвучку',
-          items: translations,
-          onBack: function () { Lampa.Controller.toggle('content'); },
-          onSelect: function (translation) {
-            Lampa.Loading.start();
-            openCatalogKodik(choice, movie, translation.player, sourceName, translation.title, true);
-          }
-        });
-      }
-      Lampa.Loading.stop();
-      var material = { title: choice.title, link: playerUrl, translation: { title: voiceName || sourceName } };
-      var seasons = {};
-      var seasonRe = /<div class="season-([^\"]+)">([\s\S]*?)(?=<\/div>)/gi;
-      var seasonMatch;
-      while ((seasonMatch = seasonRe.exec(rawPlayerHtml))) {
-        var episodes = {};
-        var episodeRe = /<option[\s\S]*?value="([^"]+)"[\s\S]*?data-id="([^"]+)"[\s\S]*?data-hash="([^"]+)"[\s\S]*?>/gi;
-        var episodeMatch;
-        while ((episodeMatch = episodeRe.exec(seasonMatch[2]))) {
-          episodes[episodeMatch[1]] = playerUrl + (playerUrl.indexOf('?') === -1 ? '?' : '&') +
-            'season=' + encodeURIComponent(seasonMatch[1]) + '&episode=' + encodeURIComponent(episodeMatch[1]);
-        }
-        if (Object.keys(episodes).length) seasons[seasonMatch[1]] = { episodes: episodes };
-      }
-      if (Object.keys(seasons).length) {
-        material.seasons = seasons;
-        delete material.link;
-      }
-      Lampa.Activity.push({ url: '', title: choice.title, component: KODIK_COMPONENT, material: material, movie: movie });
-    }, function () {
-      Lampa.Loading.stop();
-      Lampa.Noty.show('Не удалось прочитать плеер ' + sourceName);
-    });
-  }
+  /* -------------------------------------------------------------------- */
+  /* YummyAnime.TV — открытый AJAX сайта отдаёт ссылку на плеер Kodik      */
+  /* -------------------------------------------------------------------- */
 
   function openYummyTv(movie) {
     var query = queryFor(movie);
@@ -280,13 +263,13 @@
       }
       var query = htmlValue(params[1]);
       requestText(YUMMY_TV + '/engine/ajax/controller.php?' + query, function (answer) {
+        Lampa.Loading.stop();
         var json;
         try { json = typeof answer === 'string' ? JSON.parse(answer) : answer; } catch (e) {}
-        if (!json || !json.success || !json.data) {
-          Lampa.Loading.stop();
-          return Lampa.Noty.show('YummyAnime.TV не вернул ссылку плеера');
-        }
-        openCatalogKodik(choice, movie, String(json.data).replace(/\\\//g, '/'), 'YummyAnime.TV');
+        if (!json || !json.success || !json.data) return Lampa.Noty.show('YummyAnime.TV не вернул ссылку плеера');
+        showFrame(String(json.data).replace(/\\\//g, '/'), 'YummyAnime.TV · ' + choice.title, function () {
+          Lampa.Controller.toggle('content');
+        });
       }, function () {
         Lampa.Loading.stop();
         Lampa.Noty.show('Не удалось получить плеер YummyAnime.TV');
@@ -295,6 +278,20 @@
       Lampa.Loading.stop();
       Lampa.Noty.show('Не удалось открыть релиз YummyAnime.TV');
     });
+  }
+
+  /* -------------------------------------------------------------------- */
+  /* YummyAnime (api.yani.tv) — требует личный токен приложения            */
+  /* -------------------------------------------------------------------- */
+
+  function requestYummy(path, success, error) {
+    var token = String(Lampa.Storage.get('anime_online_yummy_token', '') || '').trim();
+    var network = new Lampa.Reguest();
+    network.timeout(15000);
+    network.native(proxyUrl(YUMMY_API + path), success, error, false, {
+      headers: { 'X-Application': token, 'Lang': 'ru', 'Accept': 'application/json' }
+    });
+    return network;
   }
 
   function openYummy(movie) {
@@ -339,8 +336,7 @@
       var detail = json && json.response || {};
       var videos = Array.isArray(detail.videos) ? detail.videos : [];
       videos = videos.filter(function (video) {
-        var player = video.data && video.data.player || '';
-        return /kodik/i.test(player) || /kodik|aniqit/i.test(video.iframe_url || '');
+        return /kodik/i.test(String(video.data && video.data.player || '') + ' ' + String(video.iframe_url || ''));
       });
       if (!videos.length) return Lampa.Noty.show('В этом релизе нет совместимых потоков Kodik');
       var voices = {};
@@ -360,6 +356,7 @@
           voice: voice
         };
       });
+
       function showVoices() {
         Lampa.Select.show({
           title: 'YummyAnime: выберите озвучку',
@@ -385,16 +382,8 @@
           }),
           onBack: showVoices,
           onSelect: function (episode) {
-            var video = episode.video;
-            Lampa.Activity.push({
-              url: '', title: detail.title || anime.title, component: KODIK_COMPONENT,
-              material: {
-                title: detail.title || anime.title,
-                link: video.iframe_url,
-                season: 1,
-                episode: video.number != null ? video.number : video.index,
-                translation: { title: voice.name }
-              }, movie: movie
+            showFrame(episode.video.iframe_url, (detail.title || anime.title) + ' · серия ' + episode.number, function () {
+              Lampa.Controller.toggle('content');
             });
           }
         });
@@ -407,24 +396,30 @@
     });
   }
 
+  /* -------------------------------------------------------------------- */
+  /* Меню источников                                                       */
+  /* -------------------------------------------------------------------- */
+
   function openAnime(movie) {
     Lampa.Select.show({
       title: 'Источник аниме',
       items: [
         { title: 'AniLibria', subtitle: 'Без токена · прямые HLS-потоки', source: 'anilibria' },
-        { title: 'YummyAnime', subtitle: 'Каталог и озвучки · требуется токен приложения', source: 'yummy' },
-        { title: 'Ani-Media', subtitle: 'Без токена · каталог и серии через Kodik', source: 'animedia' },
-        { title: 'YummyAnime.TV', subtitle: 'Без токена · каталог и серии через Kodik', source: 'yummytv' }
+        { title: 'YummyAnime.TV', subtitle: 'Без токена · плеер Kodik в окне Lampa', source: 'yummytv' },
+        { title: 'YummyAnime', subtitle: 'Каталог и озвучки · требуется токен приложения', source: 'yummy' }
       ],
       onBack: function () { Lampa.Controller.toggle('content'); },
       onSelect: function (item) {
-        if (item.source === 'yummy') openYummy(movie);
-        else if (item.source === 'animedia') openAniMedia(movie);
-        else if (item.source === 'yummytv') openYummyTv(movie);
+        if (item.source === 'yummytv') openYummyTv(movie);
+        else if (item.source === 'yummy') openYummy(movie);
         else openAniLibria(movie);
       }
     });
   }
+
+  /* -------------------------------------------------------------------- */
+  /* Список серий AniLibria                                                */
+  /* -------------------------------------------------------------------- */
 
   function AnimeComponent(object) {
     var self = this;
@@ -573,188 +568,16 @@
     };
   }
 
-  function KodikComponent(object) {
-    var self = this;
-    var network = new Lampa.Reguest();
-    var scroll = new Lampa.Scroll({ mask: true, over: true });
-    var files = new Lampa.Explorer(object);
-    var last;
-    var cachedPlayerScript = '';
-    var cachedInfoUrl = '';
-
-    function nativeRequest(url, success, error, postdata, options) {
-      network.clear();
-      network.timeout(15000);
-      network.native(proxyUrl(url), success, function () {
-        network.clear();
-        network.timeout(15000);
-        network.native(url, success, error, postdata || false, options);
-      }, postdata || false, options);
-    }
-
-    function absolute(url, origin) {
-      if (!url) return '';
-      if (url.indexOf('//') === 0) return 'https:' + url;
-      if (url.indexOf('/') === 0) return origin + url;
-      return url;
-    }
-
-    function decodeLink(value) {
-      try {
-        if (/^(https?:)?\/\//.test(value)) return absolute(value, '');
-        return atob(value.replace(/[a-zA-Z]/g, function (letter) {
-          var code = letter.charCodeAt(0) + 18;
-          var max = letter <= 'Z' ? 90 : 122;
-          return String.fromCharCode(code <= max ? code : code - 26);
-        }));
-      } catch (e) { return ''; }
-    }
-
-    function extractStreams(playerLink, success, error) {
-      var url = absolute(playerLink, '');
-      var originMatch = url.match(/^(https?:\/\/[^/]+)/);
-      var origin = originMatch ? originMatch[1] : 'https://kodikplayer.com';
-      nativeRequest(url, function (html) {
-        html = String(html || '').replace(/\n/g, '');
-        var paramsMatch = html.match(/\burlParams = '([^']+)'/);
-        var type = html.match(/\b(?:videoInfo|vInfo)\.type = '([^']+)'/);
-        var hash = html.match(/\b(?:videoInfo|vInfo)\.hash = '([^']+)'/);
-        var id = html.match(/\b(?:videoInfo|vInfo)\.id = '([^']+)'/);
-        var script = html.match(/<script[^>]*\bsrc=["'](\/assets\/js\/app\.(?:serial|single)\.[^"']+)["']/i) ||
-          html.match(/<script[^>]*\bsrc=["'](\/assets\/js\/app\.player_single[^"']+)["']/i);
-        var params;
-        try { params = paramsMatch && JSON.parse(paramsMatch[1]); } catch (e) {}
-        if (!params || !type || !hash || !id || !script) return error();
-        var post = 'd=' + encodeURIComponent(params.d || '') +
-          '&d_sign=' + encodeURIComponent(params.d_sign || '') +
-          '&pd=' + encodeURIComponent(params.pd || '') +
-          '&pd_sign=' + encodeURIComponent(params.pd_sign || '') +
-          '&ref=' + encodeURIComponent(params.ref || '') +
-          '&ref_sign=' + encodeURIComponent(params.ref_sign || '') +
-          '&bad_user=true&cdn_is_working=true&type=' + encodeURIComponent(type[1]) +
-          '&hash=' + encodeURIComponent(hash[1]) + '&id=' + encodeURIComponent(id[1]) + '&info=%7B%7D';
-        var scriptUrl = origin + script[1];
-
-        function getLinks() {
-          nativeRequest(cachedInfoUrl, function (json) {
-            if (typeof json === 'string') {
-              try { json = JSON.parse(json); } catch (e) { json = null; }
-            }
-            if (!json || !json.links) return error();
-            var quality = {};
-            Object.keys(json.links).forEach(function (key) {
-              var row = json.links[key];
-              var link = decodeLink(row && row[0] && row[0].src || '');
-              if (link) quality[key + 'p'] = absolute(link, origin);
-            });
-            var keys = Object.keys(quality).sort(function (a, b) { return parseInt(b) - parseInt(a); });
-            if (!keys.length) return error();
-            success({ url: quality[keys[0]], quality: quality });
-          }, error, post, {
-            headers: {
-              'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
-              'Accept': 'application/json'
-            }
-          });
-        }
-
-        if (cachedPlayerScript === scriptUrl && cachedInfoUrl) return getLinks();
-        nativeRequest(scriptUrl, function (scriptText) {
-          var info = String(scriptText || '').replace(/\n/g, '').match(/\$\.ajax\(\{type:\s*["']POST["'],\s*url:\s*atob\(["']([^"']+)["']\)/);
-          try { cachedInfoUrl = info && absolute(atob(info[1]), origin); } catch (e) { cachedInfoUrl = ''; }
-          if (!cachedInfoUrl) return error();
-          cachedPlayerScript = scriptUrl;
-          getLinks();
-        }, error, false, { dataType: 'text' });
-      }, error, false, { dataType: 'text' });
-    }
-
-    function flatten(material) {
-      var rows = [];
-      if (material.seasons) {
-        Object.keys(material.seasons).sort(function (a, b) { return Number(a) - Number(b); }).forEach(function (season) {
-          var episodes = material.seasons[season] && material.seasons[season].episodes || {};
-          Object.keys(episodes).sort(function (a, b) { return Number(a) - Number(b); }).forEach(function (episode) {
-            rows.push({ season: season, episode: episode, link: episodes[episode] });
-          });
-        });
-      } else if (material.link) rows.push({
-        season: material.season || 1,
-        episode: material.episode == null ? '' : material.episode,
-        link: material.link
-      });
-      return rows;
-    }
-
-    function play(row) {
-      Lampa.Loading.start();
-      extractStreams(row.link, function (stream) {
-        Lampa.Loading.stop();
-        var label = row.episode ? 'Сезон ' + row.season + ' · серия ' + row.episode : object.material.title;
-        var entry = {
-          url: stream.url,
-          quality: stream.quality,
-          title: label,
-          card: object.movie,
-          season: row.season || 1,
-          episode: row.episode || undefined,
-          timeline: episodeTimeline(object.movie, row.season || 1, row.episode)
-        };
-        Lampa.Player.play(entry);
-        Lampa.Player.playlist([entry]);
-      }, function () {
-        Lampa.Loading.stop();
-        Lampa.Noty.show('Kodik не отдал прямой видеопоток');
-      });
-    }
-
-    function append(row) {
-      var label = row.episode ? 'Сезон ' + row.season + ' · серия ' + row.episode : (object.material.title || 'Смотреть');
-      var voice = object.material.translation && object.material.translation.title || 'Kodik';
-      var item = $('<div class="online selector"><div class="online__body">' +
-        '<div class="online__title">' + text(label) + '</div>' +
-        '<div class="online__quality">Kodik · ' + text(voice) + '</div></div></div>');
-      item.on('hover:focus', function (event) { last = event.target; scroll.update($(event.target), true); });
-      item.on('hover:enter', function () { play(row); });
-      scroll.append(item);
-    }
-
-    this.create = function () {
-      files.appendFiles(scroll.render());
-      var rows = flatten(object.material || {});
-      if (!rows.length) {
-        var empty = Lampa.Template.get('list_empty');
-        empty.find('.empty__descr').text('У выбранной озвучки нет серий');
-        scroll.append(empty);
-      } else rows.forEach(append);
-      this.start(true);
-    };
-    this.start = function (first) {
-      if (Lampa.Activity.active().activity !== this.activity) return;
-      if (first) last = scroll.render().find('.selector').eq(0)[0];
-      if (object.movie) Lampa.Background.immediately(Lampa.Utils.cardImgBackground(object.movie));
-      Lampa.Controller.add('content', {
-        toggle: function () { Lampa.Controller.collectionSet(scroll.render(), files.render()); Lampa.Controller.collectionFocus(last || false, scroll.render()); },
-        up: function () { if (Navigator.canmove('up')) Navigator.move('up'); else Lampa.Controller.toggle('head'); },
-        down: function () { Navigator.move('down'); }, right: function () { Navigator.move('right'); },
-        left: function () { if (Navigator.canmove('left')) Navigator.move('left'); else Lampa.Controller.toggle('menu'); },
-        back: this.back
-      });
-      Lampa.Controller.toggle('content');
-    };
-    this.render = function () { return files.render(); };
-    this.back = function () { Lampa.Activity.backward(); };
-    this.pause = function () {};
-    this.stop = function () {};
-    this.destroy = function () { network.clear(); scroll.destroy(); files.destroy(); };
-  }
+  /* -------------------------------------------------------------------- */
+  /* Кнопка на карточке и настройки                                        */
+  /* -------------------------------------------------------------------- */
 
   function addButton(event) {
     if (!event || event.type !== 'complite' || !event.object || !event.data || !event.data.movie) return;
     var root = event.object.activity.render();
     if (root.find('.view--anime-online').length) return;
 
-    var button = $('<div class="full-start__button selector view--anime-online" data-subtitle="4 источника · ' + VERSION + '">' +
+    var button = $('<div class="full-start__button selector view--anime-online" data-subtitle="3 источника · ' + VERSION + '">' +
       '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>' +
       '<span>Аниме онлайн</span>' +
     '</div>');
@@ -787,17 +610,16 @@
   }
 
   Lampa.Component.add(COMPONENT, AnimeComponent);
-  Lampa.Component.add(KODIK_COMPONENT, KodikComponent);
   Lampa.Listener.follow('full', addButton);
   addSettings();
   Lampa.Manifest.plugins = {
     type: 'video',
     version: VERSION,
     name: 'Аниме онлайн — ' + VERSION,
-    description: 'Просмотр аниме через AniLibria, YummyAnime, Ani-Media и YummyAnime.TV',
+    description: 'Просмотр аниме через AniLibria, YummyAnime.TV и YummyAnime',
     component: COMPONENT,
     onContextMenu: function () {
-      return { name: 'Аниме онлайн', description: 'AniLibria + YummyAnime + Ani-Media + YummyAnime.TV' };
+      return { name: 'Аниме онлайн', description: 'AniLibria + YummyAnime.TV + YummyAnime' };
     },
     onContextLauch: function (movie) { openAnime(movie); }
   };
