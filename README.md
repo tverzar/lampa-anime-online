@@ -8,7 +8,17 @@
 
 ## Установка плагинов
 
-Lampa → Настройки → Расширения → Добавить плагин.
+**Одна ссылка на всё** — в Lampa → Настройки → Расширения → Добавить плагин:
+
+```text
+https://tverzar.github.io/lampa-anime-online/online_all.js
+```
+
+`online_all.js` — загрузчик: подтягивает `anime_online.js` и `kino_online.js` с GitHub Pages,
+а если Pages недоступен — те же файлы с jsDelivr. Обе кнопки («Аниме онлайн» и «Кино онлайн»)
+появляются на карточке.
+
+Если нужен только один плагин — адреса по отдельности:
 
 ```text
 Аниме: https://tverzar.github.io/lampa-anime-online/anime_online.js
