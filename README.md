@@ -12,18 +12,22 @@ Lampa → Настройки → Расширения → Добавить пл�
 Аниме:
 
 ```text
-https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@main/anime_online.js
+https://tverzar.github.io/lampa-anime-online/anime_online.js
 ```
 
 Кино:
 
 ```text
-https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@main/kino_online.js
+https://tverzar.github.io/lampa-anime-online/kino_online.js
 ```
 
-Резервные варианты — `https://tverzar.github.io/lampa-anime-online/<файл>` и
-`https://raw.githubusercontent.com/tverzar/lampa-anime-online/main/<файл>`
-(raw отдаёт `Content-Type: text/plain` и держит кэш десятки минут).
+Резервные адреса: `https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@main/<файл>`
+и `https://raw.githubusercontent.com/tverzar/lampa-anime-online/main/<файл>`.
+
+Кэш: GitHub Pages обновляется за минуту-две после пуша, jsDelivr держит ветку
+`@main` в кэше до нескольких часов, raw отдаёт `Content-Type: text/plain`.
+Поэтому основной адрес — Pages; если в названии плагина старая версия,
+подождите пару минут или возьмите резервный адрес.
 
 ## Кино онлайн (kino_online.js)
 
