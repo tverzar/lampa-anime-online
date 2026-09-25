@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.11.0';
+  var VERSION = '1.12.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -284,23 +284,25 @@
   /* YummyAnime (api.yani.tv) — требует личный токен приложения            */
   /* -------------------------------------------------------------------- */
 
+  function yummyToken() {
+    return String(Lampa.Storage.get('anime_online_yummy_token', '') || '').trim();
+  }
+
+  /* Токен приложения сейчас не обязателен: api.yani.tv отвечает и без него.
+     Заголовок отправляем только если токен задан в настройках. */
   function requestYummy(path, success, error) {
-    var token = String(Lampa.Storage.get('anime_online_yummy_token', '') || '').trim();
+    var headers = { 'Lang': 'ru', 'Accept': 'application/json' };
+    var token = yummyToken();
+    if (token) headers['X-Application'] = token;
     var network = new Lampa.Reguest();
-    network.timeout(15000);
-    network.native(proxyUrl(YUMMY_API + path), success, error, false, {
-      headers: { 'X-Application': token, 'Lang': 'ru', 'Accept': 'application/json' }
-    });
+    network.timeout(20000);
+    network.native(proxyUrl(YUMMY_API + path), success, error, false, { headers: headers });
     return network;
   }
 
   function openYummy(movie) {
-    var token = String(Lampa.Storage.get('anime_online_yummy_token', '') || '').trim();
-    if (!token) {
-      Lampa.Noty.show('Укажите токен приложения YummyAnime в настройках «Аниме онлайн»');
-      return;
-    }
     var query = queryFor(movie);
+    if (!query) return Lampa.Noty.show('Не удалось определить название');
     Lampa.Loading.start();
     requestYummy('/anime?q=' + encodeURIComponent(query) + '&limit=30&offset=0', function (json) {
       Lampa.Loading.stop();
@@ -325,8 +327,19 @@
       });
     }, function () {
       Lampa.Loading.stop();
-      Lampa.Noty.show('Ошибка API YummyAnime или неверный токен');
+      Lampa.Noty.show('API YummyAnime не ответил — возможно, нужен токен в настройках «Аниме онлайн»');
     });
+  }
+
+  /* У одной серии бывает несколько плееров — берём наиболее удобный для встраивания. */
+  var PLAYER_ORDER = ['alloha', 'kodik', 'cvh', 'sibnet'];
+
+  function playerRank(video) {
+    var probe = (String(video.iframe_url || '') + ' ' + String(video.data && video.data.player || '')).toLowerCase();
+    for (var i = 0; i < PLAYER_ORDER.length; i++) {
+      if (probe.indexOf(PLAYER_ORDER[i]) !== -1) return i;
+    }
+    return PLAYER_ORDER.length;
   }
 
   function openYummyRelease(anime, movie) {
@@ -336,26 +349,31 @@
       var detail = json && json.response || {};
       var videos = Array.isArray(detail.videos) ? detail.videos : [];
       videos = videos.filter(function (video) {
-        return /kodik/i.test(String(video.data && video.data.player || '') + ' ' + String(video.iframe_url || ''));
+        return !!video.iframe_url;
       });
-      if (!videos.length) return Lampa.Noty.show('В этом релизе нет совместимых потоков Kodik');
+      if (!videos.length) return Lampa.Noty.show('В этом релизе нет встраиваемых плееров');
       var voices = {};
       videos.forEach(function (video) {
         var name = String(video.data && video.data.dubbing || 'Озвучка не указана').trim();
         var key = name.toLocaleLowerCase();
-        if (!voices[key]) voices[key] = { name: name, videos: {}, player: video.data && video.data.player || '' };
+        if (!voices[key]) voices[key] = { name: name, videos: {} };
         var number = video.number != null ? String(video.number) : video.index != null ? String(video.index) : String(Object.keys(voices[key].videos).length + 1);
-        if (!voices[key].videos[number] || (!voices[key].videos[number].iframe_url && video.iframe_url)) voices[key].videos[number] = video;
+        var current = voices[key].videos[number];
+        if (!current || playerRank(video) < playerRank(current)) voices[key].videos[number] = video;
       });
       var voiceChoices = Object.keys(voices).map(function (key) {
         var voice = voices[key];
-        var count = Object.keys(voice.videos).length;
+        var numbers = Object.keys(voice.videos).sort(function (a, b) {
+          return (parseFloat(a) || 0) - (parseFloat(b) || 0);
+        });
+        var first = numbers.length ? voice.videos[numbers[0]] : null;
         return {
-          title: voice.name + ' (' + seriesCountLabel(count) + ')',
-          subtitle: voice.player || 'YummyAnime',
-          voice: voice
+          title: voice.name + ' (' + seriesCountLabel(numbers.length) + ')',
+          subtitle: first && first.data && first.data.player || 'Плеер YummyAnime',
+          voice: voice,
+          count: numbers.length
         };
-      });
+      }).sort(function (a, b) { return b.count - a.count; });
 
       function showVoices() {
         Lampa.Select.show({
@@ -378,7 +396,7 @@
         Lampa.Select.show({
           title: 'YummyAnime: выберите серию',
           items: episodes.map(function (episode) {
-            return { title: 'Серия ' + episode.number, subtitle: voice.name, video: episode.video };
+            return { title: 'Серия ' + episode.number, subtitle: voice.name, video: episode.video, number: episode.number };
           }),
           onBack: showVoices,
           onSelect: function (episode) {
@@ -406,7 +424,7 @@
       items: [
         { title: 'AniLibria', subtitle: 'Без токена · прямые HLS-потоки', source: 'anilibria' },
         { title: 'YummyAnime.TV', subtitle: 'Без токена · плеер Kodik в окне Lampa', source: 'yummytv' },
-        { title: 'YummyAnime', subtitle: 'Каталог и озвучки · требуется токен приложения', source: 'yummy' }
+        { title: 'YummyAnime', subtitle: 'Без токена · озвучки Alloha, Kodik и Sibnet в окне', source: 'yummy' }
       ],
       onBack: function () { Lampa.Controller.toggle('content'); },
       onSelect: function (item) {
@@ -592,9 +610,9 @@
     Lampa.Params.select('anime_online_yummy_token', '', '');
     Lampa.Template.add('settings_anime_online', '<div>' +
       '<div class="settings-param selector" data-name="anime_online_yummy_token" data-type="input" data-string="true" placeholder="X-Application token">' +
-        '<div class="settings-param__name">Токен приложения YummyAnime</div>' +
+        '<div class="settings-param__name">Токен приложения YummyAnime (не обязателен)</div>' +
         '<div class="settings-param__value"></div>' +
-        '<div class="settings-param__descr">Создаётся на yummyani.me/dev/applications; хранится локально в Lampa</div>' +
+        '<div class="settings-param__descr">Необязательно: API YummyAnime отвечает и без токена. Токен (yummyani.me/dev/applications) хранится локально в Lampa и уходит только на api.yani.tv</div>' +
       '</div></div>');
 
     function insertFolder() {
