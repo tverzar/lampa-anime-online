@@ -77,6 +77,36 @@ async function readLimited(response, limit, timeoutMs) {
   return { body: body };
 }
 
+var EXTRACTOR_ORIGIN = 'http://94.156.237.213.nip.io';
+var EXTRACTOR_TIMEOUT_MS = 25000;
+
+/* /kino/* — мост к серверному экстрактору HDrezka на VPS.
+   Нужен по двум причинам: телевизор часто открывает Lampa по https (тогда
+   обычный http-запрос к VPS блокируется как mixed content), и Cloudflare
+   сообщает нам IP клиента, который экстрактор подставляет в CF-Connecting-IP. */
+async function kinoBridge(request, origin) {
+  var requestUrl = new URL(request.url);
+  var target = EXTRACTOR_ORIGIN + requestUrl.pathname + requestUrl.search;
+  var clientIp = request.headers.get('CF-Connecting-IP') || '';
+  var headers = new Headers({ 'Accept': 'application/json' });
+  if (clientIp) headers.set('X-Kino-Client-IP', clientIp);
+
+  var controller = new AbortController();
+  var timeoutId = setTimeout(function () { controller.abort(); }, EXTRACTOR_TIMEOUT_MS);
+  try {
+    var upstream = await fetch(target, { headers: headers, signal: controller.signal });
+    var body = await upstream.arrayBuffer();
+    var responseHeaders = new Headers(corsHeaders(origin));
+    responseHeaders.set('Content-Type', upstream.headers.get('Content-Type') || 'application/json; charset=utf-8');
+    responseHeaders.set('Cache-Control', 'no-store');
+    return new Response(body, { status: upstream.status, headers: responseHeaders });
+  } catch (e) {
+    return jsonError('Extractor unavailable', 504, origin);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export default {
   async fetch(request) {
     var origin = request.headers.get('Origin') || '*';
@@ -85,6 +115,9 @@ export default {
     }
 
     var requestUrl = new URL(request.url);
+    if (requestUrl.pathname === '/kino' || requestUrl.pathname.indexOf('/kino/') === 0) {
+      return kinoBridge(request, origin);
+    }
     if (requestUrl.pathname !== '/proxy') return jsonError('Not found', 404, origin);
     if (request.method !== 'GET' && request.method !== 'POST') return jsonError('Method not allowed', 405, origin);
 

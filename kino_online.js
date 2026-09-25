@@ -4,28 +4,36 @@
   if (window.kino_online_plugin) return;
   window.kino_online_plugin = true;
 
-  var VERSION = '1.0.0';
+  var VERSION = '2.0.0';
+
+  /* -------------------------------------------------------------------- */
+  /* Источник 1 — HDrezka через свой серверный экстрактор.                 */
+  /*                                                                       */
+  /* Сайт закрыт антиботом Anubis и отдаёт поток только клиентам из РФ,    */
+  /* поэтому ссылку берёт сервис на нашем VPS, а видео качает сам телевизор */
+  /* (CDN сверяет IP того, кто запросил ссылку, поэтому проксировать      */
+  /* поток нельзя). Качество без входа на сайт — 360p.                     */
+  /* -------------------------------------------------------------------- */
+
+  var EXTRACTOR_TOKEN = 'aae367a1303194a38cbfb7ad146f68e2';
+  var EXTRACTORS = [
+    'https://94.156.237.213.nip.io:8443/kino/' + EXTRACTOR_TOKEN,
+    'https://lampa-anime-proxy.rammthaok.workers.dev/kino/' + EXTRACTOR_TOKEN
+  ];
+  var EXTRACTOR = EXTRACTORS[0];
+  var activeExtractor = 0;
+
+  /* Источник 2 — запасной: Kinokrad, плеер открывается окном (iframe).    */
+
   var CORS_PROXY = 'https://lampa-anime-proxy.rammthaok.workers.dev/proxy?url=';
   var FRAME_CONTROLLER = 'kino_online_frame';
   var FRAME_STYLE = 'kino_online_frame_style';
-
-  /* -------------------------------------------------------------------- */
-  /* Источники.                                                            */
-  /*                                                                       */
-  /* Поток здесь получить нельзя: сайты кинотеатров не отдают CORS и       */
-  /* прячут ссылки за сессионными токенами. Поэтому плеер открывается      */
-  /* отдельным окном (iframe) — iframe не подчиняется CORS, а ссылку на    */
-  /* плеер плагин берёт из свежей HTML-страницы фильма, чтобы токен был    */
-  /* актуальным. Плееры Alloha и другие CDN отвечают только при наличии    */
-  /* Referer, поэтому открывать их нужно именно окном, а не копировать     */
-  /* ссылку в адресную строку.                                             */
-  /* -------------------------------------------------------------------- */
 
   var SITES = [
     {
       id: 'kinokrad',
       title: 'Kinokrad',
-      subtitle: 'фильмы и сериалы · без токена',
+      subtitle: 'фильмы и сериалы · плеер окном',
       domain: 'https://kinokrad.cc',
       search: function (query) {
         return this.domain + '/index.php?do=search&subaction=search&story=' + encodeURIComponent(query);
@@ -36,10 +44,6 @@
 
   function text(value) {
     return $('<div>').text(value == null ? '' : String(value)).html();
-  }
-
-  function proxyUrl(url) {
-    return CORS_PROXY + encodeURIComponent(url);
   }
 
   function queryFor(movie) {
@@ -60,8 +64,215 @@
     return match ? match[1] : url;
   }
 
+  function proxyUrl(url) {
+    return CORS_PROXY + encodeURIComponent(url);
+  }
+
   /* -------------------------------------------------------------------- */
-  /* Полноэкранное окно с плеером                                          */
+  /* Запросы к экстрактору                                                 */
+  /* -------------------------------------------------------------------- */
+
+  function api(path, params, success, error) {
+    var pairs = [];
+    for (var key in params) {
+      if (params.hasOwnProperty(key) && params[key] != null && params[key] !== '') {
+        pairs.push(encodeURIComponent(key) + '=' + encodeURIComponent(params[key]));
+      }
+    }
+    var query = pairs.length ? '?' + pairs.join('&') : '';
+    var remembered = Lampa.Storage.get('kino_extractor', '');
+    var start = remembered === '1' ? 1 : (remembered === '0' ? 0 : activeExtractor);
+
+    function attempt(index) {
+      var network = new Lampa.Reguest();
+      /* первый адрес проверяем быстро: если порт закрыт, сразу уходим на резервный */
+      network.timeout(index === start && !remembered ? 7000 : 25000);
+      network.silent(EXTRACTORS[index] + path + query, function (data) {
+        activeExtractor = index;
+        Lampa.Storage.set('kino_extractor', String(index));
+        success(data);
+      }, function () {
+        if (index + 1 < EXTRACTORS.length) attempt(index + 1);
+        else error && error('Сервис HDrezka не ответил');
+      });
+    }
+
+    attempt(start);
+  }
+
+  /* -------------------------------------------------------------------- */
+  /* Воспроизведение прямым потоком                                        */
+  /* -------------------------------------------------------------------- */
+
+  function qualityMap(streams) {
+    var map = {};
+    streams.forEach(function (entry) {
+      if (entry.hls) map[entry.quality] = entry.hls;
+      else if (entry.mp4) map[entry.quality] = entry.mp4;
+    });
+    return map;
+  }
+
+  function bestOf(streams) {
+    var order = ['1080p', '720p', '480p', '360p'];
+    for (var index = 0; index < order.length; index++) {
+      var match = streams.filter(function (entry) { return entry.quality === order[index] && entry.hls; })[0];
+      if (match) return match;
+    }
+    return streams.filter(function (entry) { return entry.hls; })[0] || null;
+  }
+
+  function playStream(stream, title, movie) {
+    var best = bestOf(stream.streams || []);
+    if (!best) return Lampa.Noty.show('Поток не найден — попробуйте другую озвучку');
+
+    var entry = {
+      url: best.hls,
+      title: title,
+      quality: qualityMap(stream.streams || []),
+      card: movie
+    };
+    Lampa.Player.play(entry);
+    Lampa.Player.playlist([entry]);
+  }
+
+  /* -------------------------------------------------------------------- */
+  /* Разбор выдачи экстрактора                                             */
+  /* -------------------------------------------------------------------- */
+
+  function betterMatch(items, movie) {
+    var title = String(queryFor(movie) || '').toLowerCase();
+    var year = yearFor(movie);
+
+    function score(item) {
+      var value = 0;
+      var name = String(item.title || '').toLowerCase();
+      if (name === title) value += 4;
+      else if (name.indexOf(title) !== -1) value += 2;
+      if (year && String(item.year) === year) value += 3;
+      if (item.kind === 'movie') value += 1;
+      return value;
+    }
+
+    return items.slice().sort(function (left, right) { return score(right) - score(left); });
+  }
+
+  function label(item) {
+    var parts = [item.title];
+    if (item.year) parts.push(item.year);
+    if (item.kind === 'series') parts.push('сериал');
+    return parts.join(' · ');
+  }
+
+  function pickTranslator(meta, page, movie, title, callback) {
+    var translators = meta.translators || [];
+    if (translators.length < 2) {
+      return callback(translators.length ? translators[0].id : null);
+    }
+    Lampa.Select.show({
+      title: 'Озвучка',
+      items: translators.map(function (translator) {
+        return { title: translator.name, translator: translator };
+      }),
+      onBack: function () { Lampa.Controller.toggle('content'); },
+      onSelect: function (choice) { callback(choice.translator.id); }
+    });
+  }
+
+  function pickEpisode(page, translator, meta, movie, title) {
+    var seasons = meta.seasons || [];
+    var season = seasons.length ? String(seasons[0].id) : '1';
+
+    function chooseSeason(next) {
+      if (seasons.length < 2) return next(season);
+      Lampa.Select.show({
+        title: 'Сезон',
+        items: seasons.map(function (item) {
+          return { title: item.name || ('Сезон ' + item.id), season: String(item.id) };
+        }),
+        onBack: function () { Lampa.Controller.toggle('content'); },
+        onSelect: function (choice) { next(choice.season); }
+      });
+    }
+
+    chooseSeason(function (chosen) {
+      Lampa.Loading.start();
+      api('/episodes', { url: page, translator: translator, season: chosen }, function (data) {
+        Lampa.Loading.stop();
+        var episodes = data.episodes || [];
+        if (!episodes.length) return Lampa.Noty.show('Список серий пуст — попробуйте другую озвучку');
+        Lampa.Select.show({
+          title: 'Серия',
+          items: episodes.map(function (episode) {
+            return { title: episode.name || ('Серия ' + episode.id), episode: episode };
+          }),
+          onBack: function () { Lampa.Controller.toggle('content'); },
+          onSelect: function (choice) {
+            Lampa.Loading.start();
+            api('/stream', { url: page, translator: translator, season: chosen, episode: choice.episode.id },
+              function (stream) {
+                Lampa.Loading.stop();
+                if (!stream.success) return Lampa.Noty.show('Поток не отдан: ' + (stream.message || 'сайт молчит'));
+                playStream(stream, title + ' — ' + (choice.episode.name || ('серия ' + choice.episode.id)), movie);
+              }, function (message) {
+                Lampa.Loading.stop();
+                Lampa.Noty.show(message);
+              });
+          }
+        });
+      }, function (message) {
+        Lampa.Loading.stop();
+        Lampa.Noty.show(message);
+      });
+    });
+  }
+
+  function openTitle(item, movie) {
+    Lampa.Loading.start();
+    api('/info', { url: item.url }, function (meta) {
+      Lampa.Loading.stop();
+      var title = label(item);
+      pickTranslator(meta, item.url, movie, title, function (translator) {
+        if (meta.is_series) return pickEpisode(item.url, translator, meta, movie, title);
+        Lampa.Loading.start();
+        api('/stream', { url: item.url, translator: translator }, function (stream) {
+          Lampa.Loading.stop();
+          if (!stream.success) return Lampa.Noty.show('Поток не отдан: ' + (stream.message || 'сайт молчит'));
+          playStream(stream, title, movie);
+        }, function (message) {
+          Lampa.Loading.stop();
+          Lampa.Noty.show(message);
+        });
+      });
+    }, function (message) {
+      Lampa.Loading.stop();
+      Lampa.Noty.show(message);
+    });
+  }
+
+  function openRezka(movie) {
+    var query = queryFor(movie);
+    Lampa.Loading.start();
+    api('/search', { q: query, limit: 10 }, function (data) {
+      Lampa.Loading.stop();
+      var items = betterMatch(data.items || [], movie);
+      if (!items.length) return fallback(movie, 'HDrezka: ничего не найдено');
+      Lampa.Select.show({
+        title: 'HDrezka: выберите фильм',
+        items: items.map(function (item) {
+          return { title: label(item), item: item };
+        }),
+        onBack: function () { Lampa.Controller.toggle('content'); },
+        onSelect: function (choice) { openTitle(choice.item, movie); }
+      });
+    }, function (message) {
+      Lampa.Loading.stop();
+      fallback(movie, message);
+    });
+  }
+
+  /* -------------------------------------------------------------------- */
+  /* Запасной источник: окно с чужим плеером (iframe)                      */
   /* -------------------------------------------------------------------- */
 
   function frameStyles() {
@@ -78,9 +289,8 @@
     $('head').append($('<style id="' + FRAME_STYLE + '"></style>').text(css));
   }
 
-  function showFrame(url, title, hint, onBack) {
+  function showFrame(url, title, hint) {
     if (!url) return Lampa.Noty.show('Не удалось получить ссылку на плеер');
-
     frameStyles();
 
     var html = $('<div class="kino-online-frame">' +
@@ -106,7 +316,7 @@
       closed = true;
       html.find('.kino-online-frame__window').attr('src', 'about:blank');
       html.remove();
-      if (onBack) onBack();
+      Lampa.Controller.toggle('content');
     }
 
     function focusPlayer() {
@@ -122,18 +332,11 @@
         Lampa.Controller.collectionSet(html);
         Lampa.Controller.collectionFocus(html.find('.kino-online-frame__close')[0], html);
       },
-      up: function () {},
-      down: function () {},
-      left: function () {},
-      right: function () {},
+      up: function () {}, down: function () {}, left: function () {}, right: function () {},
       back: close
     });
     Lampa.Controller.toggle(FRAME_CONTROLLER);
   }
-
-  /* -------------------------------------------------------------------- */
-  /* Запросы через CORS-прокси (на телевизоре прямой запрос не проходит)   */
-  /* -------------------------------------------------------------------- */
 
   function requestText(url, success, error) {
     var network = new Lampa.Reguest();
@@ -144,48 +347,7 @@
       network.timeout(15000);
       network.native(url, success, error, false, options);
     }, false, options);
-    return network;
   }
-
-  function requestHtml(url, success, error) {
-    requestText(url, function (response) {
-      var html = typeof response === 'string' ? response : (response && response.responseText) || '';
-      if (!html || html.length < 200) return error();
-      success(html);
-    }, error);
-  }
-
-  /* -------------------------------------------------------------------- */
-  /* Разбор страницы поиска и страницы фильма                              */
-  /* -------------------------------------------------------------------- */
-
-  function findTitles(site, movie, success, error) {
-    var query = queryFor(movie);
-    if (!query) return error('Не удалось определить название');
-
-    requestHtml(site.search(query), function (html) {
-      var items = [];
-      var seen = {};
-      var match;
-      site.resultPattern.lastIndex = 0;
-      while ((match = site.resultPattern.exec(html)) !== null) {
-        var url = match[1];
-        var name = plain(match[2]);
-        if (!name || seen[url]) continue;
-        seen[url] = true;
-        items.push({ title: name, subtitle: site.title, url: url });
-        if (items.length >= 25) break;
-      }
-      if (!items.length) return error('Ничего не найдено');
-      success(items);
-    }, function () {
-      error('Поиск не ответил');
-    });
-  }
-
-  /* Плееры Alloha и родственные им отдают видео только когда знают домен
-     площадки: без параметра d они отвечают «запрашиваемый контент не найден».
-     Берём значение d из ссылок самой страницы, иначе — из домена источника. */
 
   function pageDomain(html, site) {
     var match = String(html).match(/[?&]d=([a-z0-9.\-]+\.[a-z]{2,6})/i);
@@ -215,32 +377,23 @@
     return players;
   }
 
-  function choosePlayer(players, title, movie) {
-    if (players.length === 1) {
-      return showFrame(players[0].url, title, players[0].host, function () {
-        Lampa.Controller.toggle('content');
-      });
-    }
+  function choosePlayer(players, title) {
+    if (players.length === 1) return showFrame(players[0].url, title, players[0].host);
     Lampa.Select.show({
       title: 'Выберите плеер',
       items: players.map(function (player, index) {
         return { title: 'Плеер ' + (index + 1), subtitle: player.host, player: player };
       }),
-      onBack: function () {
-        Lampa.Controller.toggle('content');
-      },
-      onSelect: function (choice) {
-        showFrame(choice.player.url, title, choice.player.host, function () {
-          Lampa.Controller.toggle('content');
-        });
-      }
+      onBack: function () { Lampa.Controller.toggle('content'); },
+      onSelect: function (choice) { showFrame(choice.player.url, title, choice.player.host); }
     });
   }
 
-  function openTitle(item, site, movie) {
+  function openKinokradTitle(item, site, movie) {
     Lampa.Loading.start();
-    requestHtml(item.url, function (html) {
+    requestText(item.url, function (response) {
       Lampa.Loading.stop();
+      var html = typeof response === 'string' ? response : (response && response.responseText) || '';
       var domain = pageDomain(html, site);
       var players = extractPlayers(html).map(function (player) {
         player.url = withDomain(player.url, domain);
@@ -249,50 +402,59 @@
       if (!players.length) return Lampa.Noty.show('На этой странице плеер не найден — выберите другой результат');
       var year = yearFor(movie);
       var title = item.title + (year && item.title.indexOf(year) === -1 ? ' · ' + year : '');
-      choosePlayer(players, title, movie);
+      choosePlayer(players, title);
     }, function () {
       Lampa.Loading.stop();
       Lampa.Noty.show('Не удалось открыть страницу фильма');
     });
   }
 
-  function openSource(site, movie) {
+  function openKinokrad(site, movie, message) {
+    if (message) Lampa.Noty.show(message);
     Lampa.Loading.start();
-    findTitles(site, movie, function (items) {
+    requestText(site.search(queryFor(movie)), function (response) {
       Lampa.Loading.stop();
+      var html = typeof response === 'string' ? response : (response && response.responseText) || '';
+      var items = [];
+      var seen = {};
+      var match;
+      site.resultPattern.lastIndex = 0;
+      while ((match = site.resultPattern.exec(html)) !== null) {
+        var url = match[1];
+        var name = plain(match[2]);
+        if (!name || seen[url]) continue;
+        seen[url] = true;
+        items.push({ title: name, subtitle: site.title, url: url });
+        if (items.length >= 25) break;
+      }
+      if (!items.length) return Lampa.Noty.show(site.title + ': ничего не найдено');
       Lampa.Select.show({
         title: site.title + ': выберите фильм',
         items: items,
-        onBack: function () {
-          Lampa.Controller.toggle('content');
-        },
-        onSelect: function (choice) {
-          openTitle(choice, site, movie);
-        }
+        onBack: function () { Lampa.Controller.toggle('content'); },
+        onSelect: function (choice) { openKinokradTitle(choice, site, movie); }
       });
-    }, function (message) {
+    }, function () {
       Lampa.Loading.stop();
-      Lampa.Noty.show(site.title + ': ' + (message || 'ничего не найдено'));
+      Lampa.Noty.show('Поиск на ' + site.title + ' не ответил');
     });
   }
 
-  function openKino(movie) {
-    if (!queryFor(movie)) return Lampa.Noty.show('Не удалось определить название');
-
-    if (SITES.length === 1) return openSource(SITES[0], movie);
-
+  function fallback(movie, message) {
+    if (SITES.length === 1) return openKinokrad(SITES[0], movie, message);
     Lampa.Select.show({
       title: 'Откуда смотреть',
       items: SITES.map(function (site) {
         return { title: site.title, subtitle: site.subtitle, site: site };
       }),
-      onBack: function () {
-        Lampa.Controller.toggle('content');
-      },
-      onSelect: function (choice) {
-        openSource(choice.site, movie);
-      }
+      onBack: function () { Lampa.Controller.toggle('content'); },
+      onSelect: function (choice) { openKinokrad(choice.site, movie); }
     });
+  }
+
+  function openKino(movie) {
+    if (!queryFor(movie)) return Lampa.Noty.show('Не удалось определить название');
+    openRezka(movie);
   }
 
   /* -------------------------------------------------------------------- */
@@ -304,7 +466,7 @@
     var root = event.object.activity.render();
     if (root.find('.view--kino-online').length) return;
 
-    var button = $('<div class="full-start__button selector view--kino-online" data-subtitle="Kinokrad · ' + VERSION + '">' +
+    var button = $('<div class="full-start__button selector view--kino-online" data-subtitle="HDrezka + Kinokrad · ' + VERSION + '">' +
       '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M3 5h18v14H3zM5 7v10h14V7H5zm3 2 5 3-5 3V9z"/></svg>' +
       '<span>Кино онлайн</span>' +
     '</div>');
@@ -318,14 +480,17 @@
 
   Lampa.Listener.follow('full', addButton);
 
+  /* Отладочный вход: можно вызвать из консоли — window.__kino.open({title:'Интерстеллар'}) */
+  window.__kino = { version: VERSION, open: openKino, api: api, extractor: EXTRACTOR };
+
   Lampa.Manifest.plugins = {
     type: 'video',
     version: VERSION,
     name: 'Кино онлайн — ' + VERSION,
-    description: 'Фильмы и сериалы из онлайн-кинотеатра Kinokrad',
+    description: 'Фильмы и сериалы: HDrezka прямым потоком, Kinokrad запасным',
     component: 'kino_online',
     onContextMenu: function () {
-      return { name: 'Кино онлайн', description: 'Kinokrad — фильмы и сериалы' };
+      return { name: 'Кино онлайн', description: 'HDrezka — прямой поток' };
     },
     onContextLauch: function (movie) { openKino(movie); }
   };
