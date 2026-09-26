@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.3.0"
+VERSION = "1.3.1"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -351,18 +351,12 @@ class KodikSession:
                             "media_hash": kodik_attribute(attributes, "data-serial-hash")})
         return seasons
 
-    def catalog(self, url=None, media_id=None, media_hash=None, form="serial", episode=None):
-        """Либо разбор ссылки /serial|/season/<id>/<hash>, либо серии конкретной озвучки."""
-        if url:
-            match = re.search(r"/(serial|season)/(\d+)/([0-9a-f]{16,})", url)
-            if not match:
-                raise ValueError("нужна ссылка вида https://kodikplayer.com/serial/<id>/<hash>/720p "
-                                 "или .../season/<id>/<hash>/720p")
-            form, media_id, media_hash = match.group(1), match.group(2), match.group(3)
-        if not (media_id and media_hash):
-            raise ValueError("нужны media_id и media_hash")
-        if form not in ("serial", "season"):
-            form = "serial"
+    @staticmethod
+    def _other(form):
+        return "season" if form == "serial" else "serial"
+
+    def _catalog_page(self, media_id, media_hash, form, episode=None):
+        """Одна страница Kodik: серии, озвучки и, если просили, поток серии."""
         html = self.page_of(media_id, media_hash, form=form)
         data = {"media_id": media_id, "media_hash": media_hash, "form": form,
                 "episodes": self.parse_episodes(html), "seasons": self.parse_seasons(html),
@@ -385,7 +379,16 @@ class KodikSession:
         if not data["episodes"] and data["translations"]:
             chosen = next((item for item in data["translations"] if item["id"] == data["default"]), None)
             if chosen:
-                data["episodes"] = self.parse_episodes(self.page_of(chosen["media_id"], chosen["media_hash"], form=form))
+                for candidate in (form, self._other(form)):
+                    try:
+                        episodes = self.parse_episodes(
+                            self.page_of(chosen["media_id"], chosen["media_hash"], form=candidate))
+                    except Exception:  # страница озвучки есть не у каждой формы
+                        continue
+                    if episodes:
+                        data["episodes"] = episodes
+                        data["episodes_form"] = candidate
+                        break
         if episode is not None:
             item = next((entry for entry in data["episodes"] if str(entry["number"]) == str(episode)), None)
             if item is None and data["episodes"]:
@@ -394,6 +397,36 @@ class KodikSession:
                 data["episode"] = item["number"]
                 data["streams"] = self.stream(item["id"], item["hash"])["streams"]
         return data
+
+    def catalog(self, url=None, media_id=None, media_hash=None, form="", episode=None):
+        """Либо разбор ссылки /serial|/season/<id>/<hash>, либо серии конкретной озвучки.
+
+        Форму страницы определяем сами: у ссылок YummyAnime идентификаторы
+        «сезонные», и запрос к /serial/ с ними отвечает 500.
+        """
+        if url:
+            match = re.search(r"/(serial|season)/(\d+)/([0-9a-f]{16,})", url)
+            if not match:
+                raise ValueError("нужна ссылка вида https://kodikplayer.com/serial/<id>/<hash>/720p "
+                                 "или .../season/<id>/<hash>/720p")
+            form, media_id, media_hash = match.group(1), match.group(2), match.group(3)
+        if not (media_id and media_hash):
+            raise ValueError("нужны media_id и media_hash")
+        forms = [form] if form in ("serial", "season") else ["serial", "season"]
+        empty, error = None, None
+        for candidate in forms:
+            try:
+                data = self._catalog_page(media_id, media_hash, candidate, episode)
+            except Exception as failure:  # noqa: BLE001 — вторая форма обычно и срабатывает
+                error = failure
+                continue
+            if data["episodes"] or data["translations"]:
+                return data
+            if empty is None:
+                empty = data
+        if empty is not None:
+            return empty
+        raise error if error is not None else ValueError("Kodik не отдал страницу")
 
     def stream(self, seria_id, seria_hash, quality="720p"):
         page = "%s/seria/%s/%s/%s" % (KODIK, seria_id, seria_hash, quality)
@@ -543,10 +576,11 @@ class Handler(BaseHTTPRequestHandler):
                 media_id = self._param(params, "media_id")
                 media_hash = self._param(params, "media_hash")
                 episode = self._param(params, "episode")
+                form = self._param(params, "form", "")
                 try:
                     self._send(KODIK_SESSION.catalog(url=url if url.startswith("http") else None,
                                                      media_id=media_id, media_hash=media_hash,
-                                                     episode=episode))
+                                                     form=form or "", episode=episode))
                 except ValueError as error:
                     self._send({"error": str(error)}, 400)
             elif action == "kodik_url":

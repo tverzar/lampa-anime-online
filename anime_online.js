@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.14.0';
+  var VERSION = '1.14.1';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -363,7 +363,10 @@
 
   function showKodikEpisodes(link, releaseTitle, movie, catalog, translation) {
     Lampa.Loading.start();
-    extractorApi('kodik', { media_id: translation.media_id, media_hash: translation.media_hash }, function (data) {
+    /* form подсказываем сервису: у ссылок YummyAnime идентификаторы «сезонные»,
+       и запрос по умолчанию (/serial/) на них отвечает 500. */
+    extractorApi('kodik', { media_id: translation.media_id, media_hash: translation.media_hash,
+                            form: (catalog && catalog.form) || '' }, function (data) {
       Lampa.Loading.stop();
       var episodes = (data && data.episodes) || [];
       if (!episodes.length) return showFrame(link, releaseTitle, backToContent);
