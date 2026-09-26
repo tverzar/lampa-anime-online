@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.21.0';
+  var VERSION = '1.22.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -399,10 +399,29 @@
     return quality;
   }
 
+  function qualitySetting() {
+    try { return String(Lampa.Storage.get('anime_quality', 'auto') || 'auto'); } catch (error) { return 'auto'; }
+  }
+
+  /* Плеер Lampa сам подменяет ссылку на качество из своей настройки «Качество
+     видео по умолчанию» (по умолчанию 1080p) — и тогда наш выбор 480p не
+     работает. Поэтому при фиксированном качестве не отдаём плееру более
+     высокие: подменить будет нечем, а переключатель в плеере остаётся. */
+  function qualityWithin(quality) {
+    var chosen = qualitySetting();
+    if (chosen === 'auto') return quality;
+    var limit = parseInt(chosen, 10) || 0;
+    var filtered = {};
+    for (var name in quality) {
+      if (quality.hasOwnProperty(name) && (parseInt(name, 10) || 0) <= limit) filtered[name] = quality[name];
+    }
+    for (var key in filtered) { if (filtered.hasOwnProperty(key)) return filtered; }
+    return quality;
+  }
+
   function bestQuality(quality) {
     var order = ['1080p', '720p', '480p', '360p'];
-    var chosen = 'auto';
-    try { chosen = String(Lampa.Storage.get('anime_quality', 'auto') || 'auto'); } catch (error) { chosen = 'auto'; }
+    var chosen = qualitySetting();
     if (chosen !== 'auto' && quality[chosen]) return chosen;
     for (var index = 0; index < order.length; index++) {
       if (quality[order[index]]) return order[index];
@@ -603,7 +622,7 @@
 
   /* Поток играет штатный плеер Lampa: пульт работает, чужой рекламы нет. */
   function playStreams(movie, releaseTitle, number, streams) {
-    var quality = streamQuality(streams);
+    var quality = qualityWithin(streamQuality(streams));
     var name = bestQuality(quality);
     if (!name) return false;
     if (VIDEO_VIA_SERVER) {
