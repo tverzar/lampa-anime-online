@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.3.1"
+VERSION = "1.4.0"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -473,6 +473,45 @@ TOKEN = ""
 CONFIG = {}
 
 
+def fetch_url(url, timeout=60):
+    """Запрос к CDN без подмены заголовков — нужен для видео-прокси."""
+    request = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*",
+                                                   "Accept-Encoding": "identity"})
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
+def proxy_link(base, url):
+    """Ссылка внутри плейлиста → наш прокси."""
+    action = "hls" if ".m3u8" in url.split("?")[0].lower() else "segment"
+    return "%s/%s?url=%s" % (base.rstrip("/"), action, urllib.parse.quote(url, safe=""))
+
+
+def proxy_manifest(base, url):
+    """Скачать плейлист и переписать все ссылки на наш прокси.
+
+    Нужно там, где CDN Кодика (solodcdn.com) не открывается у зрителя:
+    телевизор тянет поток с нашего сервера, а сервер — с CDN.
+    """
+    response = fetch_url(url)
+    raw = response.read()
+    final = response.url
+    content_type = response.headers.get("Content-Type") or "application/vnd.apple.mpegurl"
+    text = raw.decode("utf-8", "ignore")
+    lines = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        if not stripped:
+            lines.append(line)
+            continue
+        if stripped.startswith("#"):
+            lines.append(re.sub(r'URI="([^"]+)"',
+                                lambda m: 'URI="%s"' % proxy_link(base, urllib.parse.urljoin(final, m.group(1))),
+                                line))
+            continue
+        lines.append(proxy_link(base, urllib.parse.urljoin(final, stripped)))
+    return "\n".join(lines).encode(), content_type
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "kino-extractor/" + VERSION
 
@@ -489,6 +528,26 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Cache-Control", "no-store")
         self.end_headers()
         self.wfile.write(body)
+
+    def _send_raw(self, body, content_type, status=200, cache="no-store"):
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Headers", "*")
+        self.send_header("Cache-Control", cache)
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _proxy_base(self, params):
+        """Адрес, по которому прокси-ссылки видны клиенту."""
+        base = self._param(params, "base", "")
+        if base:
+            return base.rstrip("/")
+        host = self.headers.get("X-Forwarded-Host") or self.headers.get("Host") or "127.0.0.1:8791"
+        scheme = self.headers.get("X-Forwarded-Proto") or ("https" if ":8443" in host else "http")
+        prefix = self.path.split("?")[0].rsplit("/", 1)[0]
+        return "%s://%s%s" % (scheme, host, prefix)
 
     def _client_ip(self):
         for header in ("X-Kino-Client-IP", "X-Real-IP", "X-Client-IP", "CF-Connecting-IP"):
@@ -597,6 +656,25 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 result["success"] = bool(result.get("streams"))
                 self._send(result, 200 if result.get("streams") else 502)
+            elif action == "hls":
+                """Видео-прокси: плейлист CDN с переписанными на нас ссылками."""
+                url = self._param(params, "url", "")
+                if not url.startswith("http"):
+                    self._send({"error": "нужен параметр url — ссылка на плейлист m3u8"}, 400)
+                    return
+                base = self._proxy_base(params)
+                body, content_type = proxy_manifest(base, url)
+                self._send_raw(body, content_type)
+            elif action == "segment":
+                """Видео-прокси: сегмент или вложенный плейлист с CDN."""
+                url = self._param(params, "url", "")
+                if not url.startswith("http"):
+                    self._send({"error": "нужен параметр url — ссылка на сегмент"}, 400)
+                    return
+                response = fetch_url(url)
+                body = response.read()
+                content_type = response.headers.get("Content-Type") or "video/mp2t"
+                self._send_raw(body, content_type, cache="public, max-age=600")
             elif action == "kodik_stream":
                 seria, hashed = self._param(params, "id", ""), self._param(params, "hash", "")
                 if not (seria and hashed):
@@ -608,7 +686,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send({"error": "неизвестный метод",
                             "methods": ["health", "search", "info", "episodes", "stream",
-                                        "kodik", "kodik_url", "kodik_stream"]}, 404)
+                                        "kodik", "kodik_url", "kodik_stream", "hls", "segment"]}, 404)
         except Exception as error:  # noqa: BLE001 — сервис должен отвечать, а не падать
             log("ошибка обработки %s: %r", self.path, error)
             self._send({"error": str(error)}, 500)

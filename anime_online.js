@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.14.1';
+  var VERSION = '1.15.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -397,22 +397,59 @@
     return quality;
   }
 
-  function bestStream(quality) {
+  function bestQuality(quality) {
     var order = ['1080p', '720p', '480p', '360p'];
-    var best = '';
-    for (var index = 0; index < order.length && !best; index++) best = quality[order[index]] || '';
-    if (best) return best;
-    for (var name in quality) { if (quality.hasOwnProperty(name)) return quality[name]; }
+    for (var index = 0; index < order.length; index++) {
+      if (quality[order[index]]) return order[index];
+    }
+    for (var name in quality) { if (quality.hasOwnProperty(name)) return name; }
     return '';
   }
 
-  /* Поток играет штатный плеер Lampa: пульт работает, чужой рекламы нет. */
-  function playStreams(movie, releaseTitle, number, streams) {
-    var quality = streamQuality(streams);
-    var best = bestStream(quality);
-    if (!best) return false;
+  function extractorBase() {
+    return EXTRACTORS[activeExtractor] || EXTRACTORS[0];
+  }
+
+  function proxiedStream(url) {
+    var base = extractorBase();
+    return base + '/hls?url=' + encodeURIComponent(url) + '&base=' + encodeURIComponent(base);
+  }
+
+  /* Открывается ли поток у самого зрителя. CDN Кодика (solodcdn.com) у части
+     провайдеров недоступен: телевизор ссылку получает, а видео скачать не
+     может — тогда гоняем поток через наш сервер (сервис умеет проксировать
+     HLS: ручки hls и segment). */
+  function streamOpens(url, done) {
+    if (!window.fetch) return done(true);
+    var finished = false;
+    var timer = setTimeout(function () {
+      if (finished) return;
+      finished = true;
+      done(false);
+    }, 6000);
+    try {
+      window.fetch(url, { mode: 'no-cors', cache: 'no-store' }).then(function () {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        done(true);
+      }, function () {
+        if (finished) return;
+        finished = true;
+        clearTimeout(timer);
+        done(false);
+      });
+    } catch (error) {
+      if (finished) return;
+      finished = true;
+      clearTimeout(timer);
+      done(true);
+    }
+  }
+
+  function playResolved(movie, releaseTitle, number, quality, url) {
     var entry = {
-      url: best,
+      url: url,
       title: releaseTitle + ' — серия ' + number,
       quality: quality,
       season: 1,
@@ -423,6 +460,22 @@
     entry.playlist = [entry];
     Lampa.Player.play(entry);
     Lampa.Player.playlist(entry.playlist);
+  }
+
+  /* Поток играет штатный плеер Lampa: пульт работает, чужой рекламы нет. */
+  function playStreams(movie, releaseTitle, number, streams) {
+    var quality = streamQuality(streams);
+    var name = bestQuality(quality);
+    if (!name) return false;
+    streamOpens(quality[name], function (opens) {
+      if (opens) return playResolved(movie, releaseTitle, number, quality, quality[name]);
+      var viaProxy = {};
+      for (var item in quality) {
+        if (quality.hasOwnProperty(item)) viaProxy[item] = proxiedStream(quality[item]);
+      }
+      Lampa.Noty.show('CDN недоступен с телевизора — видео идёт через наш сервер');
+      playResolved(movie, releaseTitle, number, viaProxy, viaProxy[name]);
+    });
     return true;
   }
 
