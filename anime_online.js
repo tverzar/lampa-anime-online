@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.12.1';
+  var VERSION = '1.12.2';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -610,9 +610,9 @@
     Lampa.Params.select('anime_online_yummy_token', '', '');
     Lampa.Template.add('settings_anime_online', '<div>' +
       '<div class="settings-param selector" data-name="anime_online_yummy_token" data-type="input" data-string="true" placeholder="X-Application token">' +
-        '<div class="settings-param__name">Токен приложения YummyAnime (не обязателен)</div>' +
+        '<div class="settings-param__name">Токен приложения YummyAnime (не нужен)</div>' +
         '<div class="settings-param__value"></div>' +
-        '<div class="settings-param__descr">Необязательно: API YummyAnime отвечает и без токена. Токен (yummyani.me/dev/applications) хранится локально в Lampa и уходит только на api.yani.tv</div>' +
+        '<div class="settings-param__descr">Вписывать нечего: api.yani.tv отвечает без токена. Раздел с токенами есть только у старого сайта yummyani.me (yummyani.me/dev/applications), у нового yummyanime.tv его нет. Поле оставлено про запас: если YummyAnime начнёт требовать токен, он уйдёт заголовком X-Application только на api.yani.tv.</div>' +
       '</div></div>');
 
     function insertFolder() {
