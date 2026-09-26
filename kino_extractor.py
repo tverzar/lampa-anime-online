@@ -16,6 +16,7 @@
 """
 import argparse
 import base64
+from datetime import datetime
 import gzip
 import hashlib
 import http.cookiejar
@@ -30,7 +31,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.4.1"
+VERSION = "1.5.0"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -473,6 +474,23 @@ TOKEN = ""
 CONFIG = {}
 
 
+LOG_FILE = "/var/log/kino-plugin.log"
+
+
+def append_log(kind, message, client, agent):
+    """Журнал отчётов от плагинов: по нему видно, что происходит на телевизоре."""
+    text = " ".join(str(message or "").split())[:2000]
+    line = "%s | %s | %s | %s | %s\n" % (
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"), kind, client, str(agent or "")[:80], text)
+    try:
+        if os.path.exists(LOG_FILE) and os.path.getsize(LOG_FILE) > 2 * 1024 * 1024:
+            os.replace(LOG_FILE, LOG_FILE + ".1")
+        with open(LOG_FILE, "a", encoding="utf-8") as handle:
+            handle.write(line)
+    except Exception as error:  # noqa: BLE001 — журнал не должен ломать сервис
+        log("не смог записать журнал: %r", error)
+
+
 def fetch_url(url, timeout=60):
     """Запрос к CDN без подмены заголовков — нужен для видео-прокси."""
     request = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "*/*",
@@ -668,6 +686,12 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 result["success"] = bool(result.get("streams"))
                 self._send(result, 200 if result.get("streams") else 502)
+            elif action == "log":
+                """Отчёт из плагина: что делает телевизор и где спотыкается."""
+                kind = (self._param(params, "kind", "plugin") or "plugin")[:32]
+                message = self._param(params, "msg", "")
+                append_log(kind, message, geo_ip, self.headers.get("User-Agent"))
+                self._send({"ok": True})
             elif action == "hls":
                 """Видео-прокси: плейлист CDN с переписанными на нас ссылками."""
                 url = self._param(params, "url", "")
@@ -708,7 +732,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send({"error": "неизвестный метод",
                             "methods": ["health", "search", "info", "episodes", "stream",
-                                        "kodik", "kodik_url", "kodik_stream", "hls", "segment"]}, 404)
+                                        "kodik", "kodik_url", "kodik_stream", "hls", "segment", "log"]}, 404)
         except Exception as error:  # noqa: BLE001 — сервис должен отвечать, а не падать
             log("ошибка обработки %s: %r", self.path, error)
             self._send({"error": str(error)}, 500)

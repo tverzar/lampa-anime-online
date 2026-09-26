@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.16.0';
+  var VERSION = '1.17.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -410,6 +410,39 @@
     return EXTRACTORS[activeExtractor] || EXTRACTORS[0];
   }
 
+  /* Отчёты на наш сервер: по ним видно, что делает телевизор и где рвётся.
+     Читается в /var/log/kino-plugin.log на VPS. */
+  function report(kind, message) {
+    try {
+      var base = extractorBase();
+      var url = base + '/log?kind=' + encodeURIComponent(kind) +
+        '&msg=' + encodeURIComponent(String(message || '').slice(0, 1500));
+      if (window.fetch) window.fetch(url, { mode: 'no-cors', cache: 'no-store' }).catch(function () { });
+      else { var image = new Image(); image.src = url; }
+    } catch (error) { /* журнал не должен мешать просмотру */ }
+  }
+
+  function deviceLine() {
+    var agent = (typeof navigator !== 'undefined' && navigator.userAgent) || 'без UA';
+    return 'плагин ' + VERSION + ' | UA ' + agent.slice(0, 130);
+  }
+
+  /* Что происходит в видеоэлементе через несколько секунд после запуска. */
+  function videoState() {
+    var video = document.querySelector ? document.querySelector('video') : null;
+    if (!video) return 'видео-элемента нет';
+    return 'readyState ' + video.readyState + ', networkState ' + video.networkState +
+      ', ошибка ' + (video.error ? video.error.code : 'нет') +
+      ', время ' + (video.currentTime || 0).toFixed(1) +
+      ', кадр ' + video.videoWidth + 'x' + video.videoHeight;
+  }
+
+  function watchVideo(number) {
+    [4000, 12000, 25000].forEach(function (delay) {
+      setTimeout(function () { report('video', 'серия ' + number + ': ' + videoState()); }, delay);
+    });
+  }
+
   /* Видео Кодика у российских провайдеров закрыто (solodcdn.com): телевизор
      ссылку получает, а сам поток скачать не может — плеер открывается и
      сразу закрывается. Поэтому по умолчанию гоняем видео через наш сервер
@@ -478,8 +511,11 @@
       timeline: episodeTimeline(movie, 1, parseFloat(number) || number)
     };
     entry.playlist = [entry];
+    report('play', 'серия ' + number + ' | качества ' + Object.keys(quality).join('/') +
+      ' | поток ' + String(url).slice(0, 70));
     Lampa.Player.play(entry);
     Lampa.Player.playlist(entry.playlist);
+    watchVideo(number);
   }
 
   /* Поток играет штатный плеер Lampa: пульт работает, чужой рекламы нет. */
@@ -506,10 +542,12 @@
       Lampa.Loading.stop();
       if (!playStreams(movie, releaseTitle, episode.number, (data && data.streams) || [])) {
         Lampa.Noty.show('Kodik не отдал поток для этой серии');
+        report('fail', 'Kodik не отдал поток: ' + link);
       }
     }, function () {
       Lampa.Loading.stop();
       Lampa.Noty.show('Не удалось получить поток Kodik');
+      report('fail', 'не получил поток Kodik: ' + link);
     });
   }
 
@@ -594,11 +632,13 @@
       Lampa.Loading.stop();
       if (!playStreams(movie, releaseTitle, number, (data && data.streams) || [])) {
         Lampa.Noty.show('Kodik не отдал поток — открываю окном');
+        report('fail', 'старый YummyAnime: Kodik не отдал поток — уходим окном');
         fallback();
       }
     }, function () {
       Lampa.Loading.stop();
       Lampa.Noty.show('Сервис потоков не ответил — открываю окном');
+        report('fail', 'сервис потоков не ответил — уходим окном');
       fallback();
     });
   }
@@ -900,6 +940,16 @@
     },
     onContextLauch: function (movie) { openAnime(movie); }
   };
+
+  /* Сразу сообщаем на сервер, кто и с чем запустился. */
+  report('load', deviceLine());
+
+  /* Ошибки плагина и плеера тоже уходят в журнал на сервере. */
+  try {
+    window.addEventListener('error', function (event) {
+      report('js-error', (event && event.message) + ' @ ' + (event && event.filename) + ':' + (event && event.lineno));
+    });
+  } catch (error) { /* среда без addEventListener */ }
 
   console.log('[Anime Online] loaded', VERSION);
 

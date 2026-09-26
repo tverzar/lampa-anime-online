@@ -17,7 +17,7 @@
   if (window.anime_check_plugin) return;
   window.anime_check_plugin = true;
 
-  var VERSION = '1.0.1';
+  var VERSION = '1.0.2';
   var TOKEN = 'aae367a1303194a38cbfb7ad146f68e2';
   var ADDRESSES = [
     { name: 'Прямой адрес 8443', base: 'https://94.156.237.213.nip.io:8443/kino/' + TOKEN },
@@ -37,7 +37,18 @@
     console.log('[anime_check] ' + text);
   }
 
+  /* Тот же отчёт уходит на наш сервер: его видно в журнале, даже если
+     фотографировать экран нечем. */
+  function sendLog(base, all) {
+    try {
+      var url = base + '/log?kind=check&msg=' + encodeURIComponent(all.join(' || ').slice(0, 1800));
+      if (window.fetch) window.fetch(url, { mode: 'no-cors', cache: 'no-store' }).catch(function () { });
+      else { var image = new Image(); image.src = url; }
+    } catch (error) { /* журнал не должен мешать проверке */ }
+  }
+
   function report() {
+    sendLog(working[0] || ADDRESSES[0], lines);
     var html = lines.map(function (line) {
       return '<div style="padding:.35em 0">' + String(line)
         .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</div>';
