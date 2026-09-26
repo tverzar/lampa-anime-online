@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -481,8 +481,14 @@ def fetch_url(url, timeout=60):
 
 
 def proxy_link(base, url):
-    """Ссылка внутри плейлиста → наш прокси."""
-    action = "hls" if ".m3u8" in url.split("?")[0].lower() else "segment"
+    """Ссылка внутри плейлиста → наш прокси (с «расширением» в адресе)."""
+    tail = url.split("?")[0].lower()
+    if ".m3u8" in tail:
+        action = "playlist.m3u8"
+    elif tail.endswith(".ts"):
+        action = "segment.ts"
+    else:
+        action = "segment"
     return "%s/%s?url=%s" % (base.rstrip("/"), action, urllib.parse.quote(url, safe=""))
 
 
@@ -581,6 +587,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         params = urllib.parse.parse_qs(parsed.query)
         action = parts[0] if parts else "health"
+        # ссылки видео-прокси могут идти с «расширением» — плеерам телевизоров
+        # важно видеть .m3u8 и .ts в адресе
+        if action in ("playlist.m3u8", "stream.m3u8", "index.m3u8"):
+            action = "hls"
+        elif action in ("segment.ts", "seg.ts", "segment.m4s"):
+            action = "segment"
         geo_ip = self._client_ip()
         try:
             if action == "health":
@@ -663,8 +675,10 @@ class Handler(BaseHTTPRequestHandler):
                     self._send({"error": "нужен параметр url — ссылка на плейлист m3u8"}, 400)
                     return
                 base = self._proxy_base(params)
-                body, content_type = proxy_manifest(base, url)
-                self._send_raw(body, content_type)
+                body, _upstream = proxy_manifest(base, url)
+                # тип именно плейлиста: Safari/AVPlayer на Apple TV иначе
+                # считает ответ обычным текстом и не играет
+                self._send_raw(body, "application/vnd.apple.mpegurl")
             elif action == "segment":
                 """Видео-прокси: сегмент или вложенный плейлист с CDN."""
                 url = self._param(params, "url", "")
@@ -673,7 +687,15 @@ class Handler(BaseHTTPRequestHandler):
                     return
                 response = fetch_url(url)
                 body = response.read()
-                content_type = response.headers.get("Content-Type") or "video/mp2t"
+                lowered = url.split("?")[0].lower()
+                if lowered.endswith(".ts"):
+                    content_type = "video/mp2t"
+                elif lowered.endswith((".mp4", ".m4s", ".m4v")):
+                    content_type = "video/mp4"
+                elif lowered.endswith(".aac"):
+                    content_type = "audio/aac"
+                else:
+                    content_type = response.headers.get("Content-Type") or "video/mp2t"
                 self._send_raw(body, content_type, cache="public, max-age=600")
             elif action == "kodik_stream":
                 seria, hashed = self._param(params, "id", ""), self._param(params, "hash", "")

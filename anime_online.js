@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.15.0';
+  var VERSION = '1.16.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -410,9 +410,29 @@
     return EXTRACTORS[activeExtractor] || EXTRACTORS[0];
   }
 
+  /* Видео Кодика у российских провайдеров закрыто (solodcdn.com): телевизор
+     ссылку получает, а сам поток скачать не может — плеер открывается и
+     сразу закрывается. Поэтому по умолчанию гоняем видео через наш сервер
+     (ручки playlist.m3u8 / segment.ts). Если у вас CDN открывается —
+     поставьте false, тогда плеер будет тянуть поток напрямую. */
+  var VIDEO_VIA_SERVER = true;
+  var proxyNoticeShown = false;
+
   function proxiedStream(url) {
     var base = extractorBase();
-    return base + '/hls?url=' + encodeURIComponent(url) + '&base=' + encodeURIComponent(base);
+    return base + '/playlist.m3u8?url=' + encodeURIComponent(url) + '&base=' + encodeURIComponent(base);
+  }
+
+  function viaServerQuality(quality) {
+    var result = {};
+    for (var item in quality) {
+      if (quality.hasOwnProperty(item)) result[item] = proxiedStream(quality[item]);
+    }
+    if (!proxyNoticeShown) {
+      proxyNoticeShown = true;
+      Lampa.Noty.show('Видео идёт через наш сервер');
+    }
+    return result;
   }
 
   /* Открывается ли поток у самого зрителя. CDN Кодика (solodcdn.com) у части
@@ -467,14 +487,15 @@
     var quality = streamQuality(streams);
     var name = bestQuality(quality);
     if (!name) return false;
+    if (VIDEO_VIA_SERVER) {
+      var served = viaServerQuality(quality);
+      playResolved(movie, releaseTitle, number, served, served[name]);
+      return true;
+    }
     streamOpens(quality[name], function (opens) {
       if (opens) return playResolved(movie, releaseTitle, number, quality, quality[name]);
-      var viaProxy = {};
-      for (var item in quality) {
-        if (quality.hasOwnProperty(item)) viaProxy[item] = proxiedStream(quality[item]);
-      }
-      Lampa.Noty.show('CDN недоступен с телевизора — видео идёт через наш сервер');
-      playResolved(movie, releaseTitle, number, viaProxy, viaProxy[name]);
+      var fallback = viaServerQuality(quality);
+      playResolved(movie, releaseTitle, number, fallback, fallback[name]);
     });
     return true;
   }
@@ -883,5 +904,5 @@
   console.log('[Anime Online] loaded', VERSION);
 
   /* Отладочный вход: из консоли можно дёрнуть сервис Kodik напрямую. */
-  window.__anime = { version: VERSION, api: extractorApi, kodik: openKodik, yummy: playYummyVideo, open: openAnime };
+  window.__anime = { version: VERSION, api: extractorApi, kodik: openKodik, yummy: playYummyVideo, open: openAnime, via_server: VIDEO_VIA_SERVER };
 })();
