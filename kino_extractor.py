@@ -31,7 +31,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.5.1"
+VERSION = "1.6.2"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -498,6 +498,102 @@ def fetch_url(url, timeout=60):
     return urllib.request.urlopen(request, timeout=timeout)
 
 
+SEGMENT_CACHE = {}      # ссылка сегмента -> (байты, тип, момент)
+SEGMENT_ORDER = {}      # папка на CDN -> порядок сегментов из плейлиста
+CACHE_LOCK = threading.Lock()
+CACHE_LIMIT = 96 * 1024 * 1024
+CACHE_TTL = 900
+PREFETCH = 3
+
+
+def cache_get(url):
+    with CACHE_LOCK:
+        item = SEGMENT_CACHE.get(url)
+    if not item:
+        return None
+    body, content_type, moment = item
+    if time.time() - moment > CACHE_TTL:
+        with CACHE_LOCK:
+            SEGMENT_CACHE.pop(url, None)
+        return None
+    return body, content_type
+
+
+def cache_size():
+    return sum(len(item[0]) for item in SEGMENT_CACHE.values())
+
+
+def cache_put(url, body, content_type):
+    if not body or len(body) > 8 * 1024 * 1024:
+        return
+    with CACHE_LOCK:
+        SEGMENT_CACHE[url] = (body, content_type, time.time())
+        while cache_size() > CACHE_LIMIT and len(SEGMENT_CACHE) > 1:
+            oldest = min(SEGMENT_CACHE, key=lambda key: SEGMENT_CACHE[key][2])
+            if oldest == url:
+                break
+            SEGMENT_CACHE.pop(oldest, None)
+
+
+def remember_order(urls):
+    """Запомнить порядок сегментов из плейлиста — он нужен для опережающей закачки."""
+    segments = [item for item in urls if ".m3u8" not in item.split("?")[0].lower()]
+    if len(segments) < 2:
+        return
+    folder = segments[0].rsplit("/", 1)[0]
+    with CACHE_LOCK:
+        SEGMENT_ORDER[folder] = segments
+
+
+def neighbours(url):
+    """Следующие сегменты: сначала по порядку из плейлиста, иначе по номеру seg-N."""
+    folder = url.rsplit("/", 1)[0]
+    with CACHE_LOCK:
+        order = SEGMENT_ORDER.get(folder)
+    if order and url in order:
+        index = order.index(url)
+        return order[index + 1:index + 1 + PREFETCH]
+    match = re.search(r"seg-(\d+)-", url)
+    if not match:
+        return []
+    number = int(match.group(1))
+    tail = match.group(0)
+    return [url.replace(tail, "seg-%d-" % (number + step)) for step in range(1, PREFETCH + 1)]
+
+
+def warm_cache(url):
+    """Заранее скачать сегмент, чтобы плеер получил его сразу."""
+    if cache_get(url):
+        return
+    try:
+        response = fetch_url(url, timeout=45)
+        body = response.read()
+        cache_put(url, body, segment_type(url, response))
+        log("подготовил сегмент: %d байт", len(body))
+    except Exception as error:  # noqa: BLE001 — подготовка не должна мешать просмотру
+        log("не смог подготовить сегмент: %r", error)
+
+
+def prefetch_after(url):
+    for target in neighbours(url):
+        if cache_get(target):
+            continue
+        threading.Thread(target=warm_cache, args=(target,), daemon=True).start()
+
+
+def segment_type(url, response=None):
+    tail = url.split("?")[0].lower()
+    if tail.endswith(".ts"):
+        return "video/mp2t"
+    if tail.endswith((".mp4", ".m4s", ".m4v")):
+        return "video/mp4"
+    if tail.endswith(".aac"):
+        return "audio/aac"
+    if response is not None:
+        return response.headers.get("Content-Type") or "video/mp2t"
+    return "video/mp2t"
+
+
 def proxy_link(base, url):
     """Ссылка внутри плейлиста → наш прокси (с «расширением» в адресе)."""
     tail = url.split("?")[0].lower()
@@ -522,6 +618,7 @@ def proxy_manifest(base, url):
     content_type = response.headers.get("Content-Type") or "application/vnd.apple.mpegurl"
     text = raw.decode("utf-8", "ignore")
     lines = []
+    absolute_list = []
     for line in text.split("\n"):
         stripped = line.strip()
         if not stripped:
@@ -532,7 +629,10 @@ def proxy_manifest(base, url):
                                 lambda m: 'URI="%s"' % proxy_link(base, urllib.parse.urljoin(final, m.group(1))),
                                 line))
             continue
-        lines.append(proxy_link(base, urllib.parse.urljoin(final, stripped)))
+        absolute = urllib.parse.urljoin(final, stripped)
+        absolute_list.append(absolute)
+        lines.append(proxy_link(base, absolute))
+    remember_order(absolute_list)
     return "\n".join(lines).encode(), content_type
 
 
@@ -553,13 +653,14 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_raw(self, body, content_type, status=200, cache="no-store"):
+    def _send_raw(self, body, content_type, status=200, cache="no-store", origin="miss"):
         self.send_response(status)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "*")
         self.send_header("Cache-Control", cache)
+        self.send_header("X-Cache", origin)
         self.end_headers()
         self.wfile.write(body)
 
@@ -709,35 +810,38 @@ class Handler(BaseHTTPRequestHandler):
                 if not url.startswith("http"):
                     self._send({"error": "нужен параметр url — ссылка на сегмент"}, 400)
                     return
+                cached = cache_get(url)
+                if cached:
+                    body, content_type = cached
+                    self._send_raw(body, content_type, cache="public, max-age=600", origin="hit")
+                    prefetch_after(url)
+                    return
                 response = fetch_url(url)
-                lowered = url.split("?")[0].lower()
-                if lowered.endswith(".ts"):
-                    content_type = "video/mp2t"
-                elif lowered.endswith((".mp4", ".m4s", ".m4v")):
-                    content_type = "video/mp4"
-                elif lowered.endswith(".aac"):
-                    content_type = "audio/aac"
-                else:
-                    content_type = response.headers.get("Content-Type") or "video/mp2t"
+                content_type = segment_type(url, response)
                 # отдаём сегмент по мере скачивания: плеер получает первые байты
                 # сразу, а не после того, как сервер соберёт все 2–3 МБ
                 self.send_response(200)
                 self.send_header("Content-Type", content_type)
                 self.send_header("Access-Control-Allow-Origin", "*")
                 self.send_header("Cache-Control", "public, max-age=600")
+                self.send_header("X-Cache", "miss")
                 length = response.headers.get("Content-Length")
                 if length and length.isdigit():
                     self.send_header("Content-Length", length)
                 else:
                     self.send_header("Connection", "close")
                 self.end_headers()
+                collected = []
                 sent = 0
                 while True:
                     chunk = response.read(64 * 1024)
                     if not chunk:
                         break
+                    collected.append(chunk)
                     self.wfile.write(chunk)
                     sent += len(chunk)
+                cache_put(url, b"".join(collected), content_type)
+                prefetch_after(url)
                 log("сегмент отдан: %d байт", sent)
             elif action == "kodik_stream":
                 seria, hashed = self._param(params, "id", ""), self._param(params, "hash", "")

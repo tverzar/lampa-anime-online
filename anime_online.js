@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.20.0';
+  var VERSION = '1.21.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -401,6 +401,9 @@
 
   function bestQuality(quality) {
     var order = ['1080p', '720p', '480p', '360p'];
+    var chosen = 'auto';
+    try { chosen = String(Lampa.Storage.get('anime_quality', 'auto') || 'auto'); } catch (error) { chosen = 'auto'; }
+    if (chosen !== 'auto' && quality[chosen]) return chosen;
     for (var index = 0; index < order.length; index++) {
       if (quality[order[index]]) return order[index];
     }
@@ -988,7 +991,19 @@
 
   function addSettings() {
     Lampa.Params.select('anime_online_yummy_token', '', '');
+    /* Качество по умолчанию: если канал до сервера узкий, 480p играет ровно. */
+    Lampa.Params.select('anime_quality', 'auto', {
+      'auto': 'Авто — до 720p',
+      '720p': '720p — максимальное',
+      '480p': '480p — меньше подгрузок',
+      '360p': '360p — самый лёгкий'
+    });
     Lampa.Template.add('settings_anime_online', '<div>' +
+      '<div class="settings-param selector" data-name="anime_quality" data-type="select">' +
+        '<div class="settings-param__name">Качество потока</div>' +
+        '<div class="settings-param__value"></div>' +
+        '<div class="settings-param__descr">Если видео подтормаживает (буферизация), выберите 480p или 360p — поток станет в 2–3 раза легче. 720p тяжелее, но картинка резче.</div>' +
+      '</div>' +
       '<div class="settings-param selector" data-name="anime_online_yummy_token" data-type="input" data-string="true" placeholder="X-Application token">' +
         '<div class="settings-param__name">Токен приложения YummyAnime (не нужен)</div>' +
         '<div class="settings-param__value"></div>' +
