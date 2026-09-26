@@ -2,7 +2,7 @@
 
 Три части в одном репозитории:
 
-- **anime_online.js** (v1.12.1) — кнопка «Аниме онлайн» на карточке (AniLibria, YummyAnime, YummyAnime.TV).
+- **anime_online.js** (v1.13.0) — кнопка «Аниме онлайн» на карточке (AniLibria, YummyAnime, YummyAnime.TV). На новом сайте (YummyAnime.TV) озвучка и серия выбираются в Lampa, а видео играет её собственный плеер: сервис на VPS отдаёт прямые HLS-ссылки плеера Kodik.
 - **kino_online.js** (v2.0.0) — кнопка «Кино онлайн»: фильмы и сериалы **HDrezka прямым HLS-потоком**; если сервер недоступен — запасной источник Kinokrad (плеер окном).
 - **kino_extractor.py** + **worker.js** — серверная часть: экстрактор HDrezka на VPS и CORS-прокси/мост на Cloudflare.
 
