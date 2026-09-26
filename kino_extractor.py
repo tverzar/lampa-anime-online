@@ -30,7 +30,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.2.0"
+VERSION = "1.3.0"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -313,8 +313,9 @@ class KodikSession:
                 raw = gzip.decompress(raw)
             return raw.decode("utf-8", "ignore")
 
-    def page_of(self, media_id, media_hash, quality="720p"):
-        url = "%s/serial/%s/%s/%s" % (KODIK, media_id, media_hash, quality)
+    def page_of(self, media_id, media_hash, quality="720p", form="serial"):
+        """form: serial (страница релиза) или season (ссылка вида YummyAnime)."""
+        url = "%s/%s/%s/%s/%s" % (KODIK, form, media_id, media_hash, quality)
         with self.lock:
             cached = self.pages.get(url)
             if cached and time.time() - cached[0] < 600:
@@ -350,17 +351,20 @@ class KodikSession:
                             "media_hash": kodik_attribute(attributes, "data-serial-hash")})
         return seasons
 
-    def catalog(self, url=None, media_id=None, media_hash=None):
-        """Либо разбор ссылки /serial/<id>/<hash>, либо серии конкретной озвучки."""
+    def catalog(self, url=None, media_id=None, media_hash=None, form="serial", episode=None):
+        """Либо разбор ссылки /serial|/season/<id>/<hash>, либо серии конкретной озвучки."""
         if url:
-            match = re.search(r"/serial/(\d+)/([0-9a-f]{16,})", url)
+            match = re.search(r"/(serial|season)/(\d+)/([0-9a-f]{16,})", url)
             if not match:
-                raise ValueError("нужна ссылка вида https://kodikplayer.com/serial/<id>/<hash>/720p")
-            media_id, media_hash = match.group(1), match.group(2)
+                raise ValueError("нужна ссылка вида https://kodikplayer.com/serial/<id>/<hash>/720p "
+                                 "или .../season/<id>/<hash>/720p")
+            form, media_id, media_hash = match.group(1), match.group(2), match.group(3)
         if not (media_id and media_hash):
             raise ValueError("нужны media_id и media_hash")
-        html = self.page_of(media_id, media_hash)
-        data = {"media_id": media_id, "media_hash": media_hash,
+        if form not in ("serial", "season"):
+            form = "serial"
+        html = self.page_of(media_id, media_hash, form=form)
+        data = {"media_id": media_id, "media_hash": media_hash, "form": form,
                 "episodes": self.parse_episodes(html), "seasons": self.parse_seasons(html),
                 "translations": [], "default": None}
         for attributes in KODIK_OPTION.findall(html):
@@ -381,7 +385,14 @@ class KodikSession:
         if not data["episodes"] and data["translations"]:
             chosen = next((item for item in data["translations"] if item["id"] == data["default"]), None)
             if chosen:
-                data["episodes"] = self.parse_episodes(self.page_of(chosen["media_id"], chosen["media_hash"]))
+                data["episodes"] = self.parse_episodes(self.page_of(chosen["media_id"], chosen["media_hash"], form=form))
+        if episode is not None:
+            item = next((entry for entry in data["episodes"] if str(entry["number"]) == str(episode)), None)
+            if item is None and data["episodes"]:
+                item = data["episodes"][0]
+            if item is not None:
+                data["episode"] = item["number"]
+                data["streams"] = self.stream(item["id"], item["hash"])["streams"]
         return data
 
     def stream(self, seria_id, seria_hash, quality="720p"):
@@ -531,11 +542,27 @@ class Handler(BaseHTTPRequestHandler):
                 url = self._param(params, "url", "")
                 media_id = self._param(params, "media_id")
                 media_hash = self._param(params, "media_hash")
+                episode = self._param(params, "episode")
                 try:
                     self._send(KODIK_SESSION.catalog(url=url if url.startswith("http") else None,
-                                                     media_id=media_id, media_hash=media_hash))
+                                                     media_id=media_id, media_hash=media_hash,
+                                                     episode=episode))
                 except ValueError as error:
                     self._send({"error": str(error)}, 400)
+            elif action == "kodik_url":
+                """Ссылка плеера Kodik с сайта (в т.ч. /season/… от YummyAnime) → потоки серии."""
+                url = self._param(params, "url", "")
+                episode = self._param(params, "episode")
+                if not url:
+                    self._send({"error": "нужен параметр url — ссылка плеера Kodik"}, 400)
+                    return
+                try:
+                    result = KODIK_SESSION.catalog(url=url, episode=episode)
+                except ValueError as error:
+                    self._send({"error": str(error)}, 400)
+                    return
+                result["success"] = bool(result.get("streams"))
+                self._send(result, 200 if result.get("streams") else 502)
             elif action == "kodik_stream":
                 seria, hashed = self._param(params, "id", ""), self._param(params, "hash", "")
                 if not (seria and hashed):
@@ -547,7 +574,7 @@ class Handler(BaseHTTPRequestHandler):
             else:
                 self._send({"error": "неизвестный метод",
                             "methods": ["health", "search", "info", "episodes", "stream",
-                                        "kodik", "kodik_stream"]}, 404)
+                                        "kodik", "kodik_url", "kodik_stream"]}, 404)
         except Exception as error:  # noqa: BLE001 — сервис должен отвечать, а не падать
             log("ошибка обработки %s: %r", self.path, error)
             self._send({"error": str(error)}, 500)
