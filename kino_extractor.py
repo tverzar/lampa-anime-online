@@ -31,7 +31,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.5.0"
+VERSION = "1.5.1"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -710,7 +710,6 @@ class Handler(BaseHTTPRequestHandler):
                     self._send({"error": "нужен параметр url — ссылка на сегмент"}, 400)
                     return
                 response = fetch_url(url)
-                body = response.read()
                 lowered = url.split("?")[0].lower()
                 if lowered.endswith(".ts"):
                     content_type = "video/mp2t"
@@ -720,7 +719,26 @@ class Handler(BaseHTTPRequestHandler):
                     content_type = "audio/aac"
                 else:
                     content_type = response.headers.get("Content-Type") or "video/mp2t"
-                self._send_raw(body, content_type, cache="public, max-age=600")
+                # отдаём сегмент по мере скачивания: плеер получает первые байты
+                # сразу, а не после того, как сервер соберёт все 2–3 МБ
+                self.send_response(200)
+                self.send_header("Content-Type", content_type)
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.send_header("Cache-Control", "public, max-age=600")
+                length = response.headers.get("Content-Length")
+                if length and length.isdigit():
+                    self.send_header("Content-Length", length)
+                else:
+                    self.send_header("Connection", "close")
+                self.end_headers()
+                sent = 0
+                while True:
+                    chunk = response.read(64 * 1024)
+                    if not chunk:
+                        break
+                    self.wfile.write(chunk)
+                    sent += len(chunk)
+                log("сегмент отдан: %d байт", sent)
             elif action == "kodik_stream":
                 seria, hashed = self._param(params, "id", ""), self._param(params, "hash", "")
                 if not (seria and hashed):

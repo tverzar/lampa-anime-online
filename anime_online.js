@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.19.0';
+  var VERSION = '1.20.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -416,8 +416,9 @@
      поток идёт медленно и легко обрывается. Мост — только если прямой
      адрес вообще не отвечал. */
   function streamBase() {
-    if (directAlive || !activeExtractor) return EXTRACTORS[0];
-    return EXTRACTORS[activeExtractor] || EXTRACTORS[0];
+    /* только прямой адрес: Cloudflare-мост плохо тянет сегменты по 2–3 МБ,
+       из-за него плеер уходит в бесконечную загрузку */
+    return EXTRACTORS[0];
   }
 
   /* Отчёты на наш сервер: по ним видно, что делает телевизор и где рвётся.
@@ -439,14 +440,31 @@
     return 'плагин ' + VERSION + ' | UA ' + agent.slice(0, 130);
   }
 
-  /* Что происходит в видеоэлементе через несколько секунд после запуска. */
+  /* Что происходит в плеере через несколько секунд после запуска: сколько
+     видеоэлементов, что с потоком, где спрятан элемент (иногда — в окне). */
   function videoState() {
-    var video = document.querySelector ? document.querySelector('video') : null;
-    if (!video) return 'видео-элемента нет';
-    return 'readyState ' + video.readyState + ', networkState ' + video.networkState +
-      ', ошибка ' + (video.error ? video.error.code : 'нет') +
-      ', время ' + (video.currentTime || 0).toFixed(1) +
-      ', кадр ' + video.videoWidth + 'x' + video.videoHeight;
+    if (!document || !document.getElementsByTagName) return 'нет доступа к странице';
+    var videos = document.getElementsByTagName('video');
+    var iframes = document.getElementsByTagName('iframe');
+    var parts = ['видео-элементов ' + videos.length, 'окон ' + iframes.length];
+    var video = videos[0] || null;
+    if (!video) {
+      for (var index = 0; index < iframes.length; index++) {
+        try {
+          var inner = iframes[index].contentDocument && iframes[index].contentDocument.getElementsByTagName('video');
+          if (inner && inner.length) { video = inner[0]; parts.push('элемент внутри окна ' + index); break; }
+        } catch (error) { parts.push('окно ' + index + ' недоступно'); }
+      }
+    }
+    if (!video && window.Lampa && Lampa.Player && Lampa.Player.video) video = Lampa.Player.video;
+    if (!video) { parts.push('видеоэлемента нет ни в странице, ни в окнах'); return parts.join(', '); }
+    parts.push('готовность ' + video.readyState,
+      'сеть ' + video.networkState,
+      'ошибка ' + (video.error ? video.error.code + '/' + (video.error.message || '') : 'нет'),
+      'время ' + (video.currentTime || 0).toFixed(1),
+      'кадр ' + video.videoWidth + 'x' + video.videoHeight,
+      'адрес …' + String(video.currentSrc || video.src || '').slice(-70));
+    return parts.join(', ');
   }
 
   function watchVideo(number) {
