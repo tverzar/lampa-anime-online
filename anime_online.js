@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.18.0';
+  var VERSION = '1.19.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -516,17 +516,51 @@
     }
   }
 
+  /* Объект фильма Lampa ссылается сам на себя, а плеер сохраняет состояние
+     через JSON.stringify — на цикле он падал («cannot serialize cyclic
+     structures»), поэтому плеер не открывался вообще. Карточку берём
+     «плоской», а перед запуском проверяем запись на сериализуемость. */
+  function plainCard(movie) {
+    var card = {};
+    if (!movie) return card;
+    ['id', 'source', 'title', 'name', 'original_title', 'original_name', 'poster_path', 'poster',
+     'release_date', 'first_air_date', 'media_type', 'status'].forEach(function (key) {
+      if (movie[key] != null && typeof movie[key] !== 'object') card[key] = movie[key];
+    });
+    return card;
+  }
+
+  function plain(value) {
+    if (value == null || typeof value !== 'object') return value;
+    try { return JSON.parse(JSON.stringify(value)); } catch (error) { return null; }
+  }
+
+  function safeEntry(entry) {
+    try {
+      JSON.stringify(entry);
+      return entry;
+    } catch (error) {
+      report('js-error', 'запись плеера не сериализуется: ' + (error && error.message) + ' — чищу поля');
+      delete entry.card;
+      delete entry.timeline;
+      try { JSON.stringify(entry); } catch (inner) { delete entry.playlist; }
+      return entry;
+    }
+  }
+
   function playResolved(movie, releaseTitle, number, quality, url) {
-    var entry = {
+    var episode = parseFloat(number) || 1;
+    var title = releaseTitle + ' — серия ' + number;
+    var card = plainCard(movie);
+    var entry = safeEntry({
       url: url,
-      title: releaseTitle + ' — серия ' + number,
+      title: title,
       quality: quality,
       season: 1,
-      episode: parseFloat(number) || 1,
-      card: movie,
-      timeline: episodeTimeline(movie, 1, parseFloat(number) || number)
-    };
-    entry.playlist = [entry];
+      episode: episode,
+      card: card,
+      timeline: plain(episodeTimeline(movie, 1, episode))
+    });
     report('play', 'серия ' + number + ' | качества ' + Object.keys(quality).join('/') +
       ' | поток ' + String(url).slice(0, 70));
     try {
@@ -537,7 +571,8 @@
       return;
     }
     try {
-      Lampa.Player.playlist(entry.playlist);
+      /* плейлист — отдельные «плоские» записи, без ссылок на entry */
+      Lampa.Player.playlist([{ url: url, title: title, quality: quality, season: 1, episode: episode }]);
       report('play-step', 'плейлист отдан: ' + number);
     } catch (error) {
       report('js-error', 'Lampa.Player.playlist упал: ' + (error && error.message));
@@ -795,8 +830,8 @@
           quality: qualityMap(episode),
           season: 1,
           episode: number || undefined,
-          card: object.movie,
-          timeline: episodeTimeline(object.movie, 1, number)
+          card: plainCard(object.movie),
+          timeline: plain(episodeTimeline(object.movie, 1, number))
         };
       }).filter(function (entry) {
         return !!entry.url;
@@ -815,10 +850,11 @@
         quality: qualityMap(episode),
         season: 1,
         episode: number || undefined,
-        card: object.movie,
-        timeline: episodeTimeline(object.movie, 1, number)
+        card: plainCard(object.movie),
+        timeline: plain(episodeTimeline(object.movie, 1, number))
       };
       entry.playlist = playlist;
+      safeEntry(entry);
       Lampa.Player.play(entry);
       Lampa.Player.playlist(playlist);
     }

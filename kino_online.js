@@ -4,7 +4,7 @@
   if (window.kino_online_plugin) return;
   window.kino_online_plugin = true;
 
-  var VERSION = '2.0.0';
+  var VERSION = '2.0.1';
 
   /* -------------------------------------------------------------------- */
   /* Источник 1 — HDrezka через свой серверный экстрактор.                 */
@@ -122,18 +122,36 @@
     return streams.filter(function (entry) { return entry.hls; })[0] || null;
   }
 
+  /* Объект фильма Lampa ссылается сам на себя, а плеер сохраняет состояние
+     через JSON.stringify — на цикле он падает и не открывается. */
+  function plainCard(movie) {
+    var card = {};
+    if (!movie) return card;
+    ['id', 'source', 'title', 'name', 'original_title', 'original_name', 'poster_path', 'poster',
+     'release_date', 'first_air_date', 'media_type', 'status'].forEach(function (key) {
+      if (movie[key] != null && typeof movie[key] !== 'object') card[key] = movie[key];
+    });
+    return card;
+  }
+
+  function safeEntry(entry) {
+    try { JSON.stringify(entry); return entry; }
+    catch (error) {
+      delete entry.card;
+      delete entry.timeline;
+      try { JSON.stringify(entry); } catch (inner) { delete entry.playlist; }
+      return entry;
+    }
+  }
+
   function playStream(stream, title, movie) {
     var best = bestOf(stream.streams || []);
     if (!best) return Lampa.Noty.show('Поток не найден — попробуйте другую озвучку');
 
-    var entry = {
-      url: best.hls,
-      title: title,
-      quality: qualityMap(stream.streams || []),
-      card: movie
-    };
+    var quality = qualityMap(stream.streams || []);
+    var entry = safeEntry({ url: best.hls, title: title, quality: quality, card: plainCard(movie) });
     Lampa.Player.play(entry);
-    Lampa.Player.playlist([entry]);
+    Lampa.Player.playlist([{ url: best.hls, title: title, quality: quality }]);
   }
 
   /* -------------------------------------------------------------------- */

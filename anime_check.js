@@ -17,7 +17,7 @@
   if (window.anime_check_plugin) return;
   window.anime_check_plugin = true;
 
-  var VERSION = '1.0.2';
+  var VERSION = '1.0.3';
   var TOKEN = 'aae367a1303194a38cbfb7ad146f68e2';
   var ADDRESSES = [
     { name: 'Прямой адрес 8443', base: 'https://94.156.237.213.nip.io:8443/kino/' + TOKEN },
@@ -126,10 +126,11 @@
     var quality = servableQuality(streams, base);
     var name = bestQuality(quality);
     if (!name) return false;
-    var entry = { url: quality[name], title: title + ' — серия ' + number, quality: quality, season: 1, episode: parseFloat(number) || 1 };
-    entry.playlist = [entry];
-    Lampa.Player.play(entry);
-    Lampa.Player.playlist(entry.playlist);
+    var episode = parseFloat(number) || 1;
+    var caption = title + ' — серия ' + number;
+    /* без ссылок на самого себя: плеер сохраняет состояние через JSON.stringify */
+    Lampa.Player.play({ url: quality[name], title: caption, quality: quality, season: 1, episode: episode });
+    Lampa.Player.playlist([{ url: quality[name], title: caption, quality: quality, season: 1, episode: episode }]);
     return true;
   }
 
