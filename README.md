@@ -27,6 +27,12 @@ https://tverzar.github.io/lampa-anime-online/online_all.js
 
 Резерв: `https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@main/<файл>`.
 
+Диагностика (не для просмотра, а чтобы найти виновника зависаний): `slow_check.js` — плагин, который уведомлением показывает запросы, что не отвечают или тянутся дольше 4 секунд:
+
+```text
+https://tverzar.github.io/lampa-anime-online/slow_check.js
+```
+
 Кэш: GitHub Pages обновляется за минуту-две, jsDelivr держит `@main` часами.
 Если в названии плагина старая версия — подождите пару минут или перезайдите в раздел расширений.
 
