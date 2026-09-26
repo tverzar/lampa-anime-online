@@ -8,11 +8,14 @@
   * подставляет в CF-Connecting-IP адрес заказчика: сайт отдаёт поток только
     клиентам из РФ/СНГ, а CDN потом сверяет IP того, кто запрашивает ссылку.
     Поэтому видео должен качать сам плагин, а не этот сервис.
+  * минтит прямые HLS-ссылки плеера Kodik (озвучки/серии нового YummyAnime):
+    ссылки Kodik не привязаны к IP, поэтому их отдаём плагину как есть.
 
 Запуск: python3 kino_extractor.py --config /etc/kino-extractor.json
-Ручки:  /kino/<token>/{health,search,info,episodes,stream}
+Ручки:  /kino/<token>/{health,search,info,episodes,stream,kodik,kodik_stream}
 """
 import argparse
+import base64
 import gzip
 import hashlib
 import http.cookiejar
@@ -27,7 +30,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -252,6 +255,177 @@ class RezkaSession:
 
 SESSION = RezkaSession()
 TOKEN = ""
+
+# ---------------------------------------------------------------------------
+# Kodik — плеер, который отдаёт новый YummyAnime (yummyanime.tv)
+# ---------------------------------------------------------------------------
+
+KODIK = "https://kodikplayer.com"
+KODIK_SITE = "https://yummyanime.tv/"
+KODIK_OPTION = re.compile(r"<option\s+([^>]*?)>", re.S)
+KODIK_EPISODE = re.compile(r'<option\s+value="(\d+)"[^>]*data-id="(\d+)"[^>]*data-hash="([^"]+)"[^>]*data-title="([^"]*)"')
+
+
+def kodik_unshift(text):
+    """Снимает обфускацию Kodik: каждая буква сдвинута на 18, с переносом по регистру."""
+    result = []
+    for symbol in text:
+        code = ord(symbol)
+        if 65 <= code <= 90 or 97 <= code <= 122:
+            limit = 90 if symbol <= "Z" else 122
+            value = code + 18
+            result.append(chr(value if value <= limit else value - 26))
+        else:
+            result.append(symbol)
+    return "".join(result)
+
+
+def kodik_decode(source):
+    if "//" in source:
+        return source
+    plain = kodik_unshift(source)
+    return base64.b64decode(plain + "=" * (-len(plain) % 4)).decode("utf-8", "ignore")
+
+
+def kodik_value(html, name):
+    match = re.search(r'var\s+%s\s*=\s*"([^"]*)"' % name, html)
+    return match.group(1) if match else ""
+
+
+def kodik_attribute(attributes, name, default=""):
+    match = re.search(r'%s="([^"]*)"' % name, attributes)
+    return match.group(1) if match else default
+
+
+class KodikSession:
+    """Каталог Kodik отдаётся страницей, ссылки — POST-ом на /ftor (живут недолго)."""
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.pages = {}
+
+    def get(self, url, referer=KODIK_SITE, timeout=45):
+        request = urllib.request.Request(url, headers={"User-Agent": UA, "Referer": referer,
+                                                       "Accept": "*/*", "Accept-Encoding": "gzip"})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            raw = response.read()
+            if response.headers.get("Content-Encoding") == "gzip":
+                raw = gzip.decompress(raw)
+            return raw.decode("utf-8", "ignore")
+
+    def page_of(self, media_id, media_hash, quality="720p"):
+        url = "%s/serial/%s/%s/%s" % (KODIK, media_id, media_hash, quality)
+        with self.lock:
+            cached = self.pages.get(url)
+            if cached and time.time() - cached[0] < 600:
+                return cached[1]
+        html = self.get(url)
+        with self.lock:
+            self.pages[url] = (time.time(), html)
+        return html
+
+    @staticmethod
+    def parse_episodes(html):
+        """Kodik иногда перечисляет одну и ту же серию дважды (по группам) — берём первую."""
+        episodes, seen = [], set()
+        for match in KODIK_EPISODE.finditer(html):
+            number = int(match.group(1))
+            if number in seen:
+                continue
+            seen.add(number)
+            episodes.append({"number": number, "id": match.group(2), "hash": match.group(3),
+                             "title": re.sub(r"\s+", " ", match.group(4)).strip() or ("%s серия" % number)})
+        return episodes
+
+    @staticmethod
+    def parse_seasons(html):
+        seasons = []
+        for attributes in KODIK_OPTION.findall(html):
+            serial_id = kodik_attribute(attributes, "data-serial-id")
+            if not serial_id:
+                continue
+            seasons.append({"number": int(kodik_attribute(attributes, "value", "1") or 1),
+                            "title": kodik_attribute(attributes, "data-title", "сезон"),
+                            "media_id": serial_id,
+                            "media_hash": kodik_attribute(attributes, "data-serial-hash")})
+        return seasons
+
+    def catalog(self, url=None, media_id=None, media_hash=None):
+        """Либо разбор ссылки /serial/<id>/<hash>, либо серии конкретной озвучки."""
+        if url:
+            match = re.search(r"/serial/(\d+)/([0-9a-f]{16,})", url)
+            if not match:
+                raise ValueError("нужна ссылка вида https://kodikplayer.com/serial/<id>/<hash>/720p")
+            media_id, media_hash = match.group(1), match.group(2)
+        if not (media_id and media_hash):
+            raise ValueError("нужны media_id и media_hash")
+        html = self.page_of(media_id, media_hash)
+        data = {"media_id": media_id, "media_hash": media_hash,
+                "episodes": self.parse_episodes(html), "seasons": self.parse_seasons(html),
+                "translations": [], "default": None}
+        for attributes in KODIK_OPTION.findall(html):
+            translation_media = kodik_attribute(attributes, "data-media-id")
+            if not translation_media:
+                continue
+            translation = {"id": kodik_attribute(attributes, "data-id"),
+                           "title": kodik_attribute(attributes, "data-title"),
+                           "media_id": translation_media,
+                           "media_hash": kodik_attribute(attributes, "data-media-hash"),
+                           "type": kodik_attribute(attributes, "data-translation-type", "voice"),
+                           "count": int(kodik_attribute(attributes, "data-episode-count", "0") or 0)}
+            data["translations"].append(translation)
+            if 'selected="selected"' in attributes and not data["default"]:
+                data["default"] = translation["id"]
+        if data["translations"] and not data["default"]:
+            data["default"] = data["translations"][0]["id"]
+        if not data["episodes"] and data["translations"]:
+            chosen = next((item for item in data["translations"] if item["id"] == data["default"]), None)
+            if chosen:
+                data["episodes"] = self.parse_episodes(self.page_of(chosen["media_id"], chosen["media_hash"]))
+        return data
+
+    def stream(self, seria_id, seria_hash, quality="720p"):
+        page = "%s/seria/%s/%s/%s" % (KODIK, seria_id, seria_hash, quality)
+        html = self.get(page)
+        vinfo = {}
+        for key in ("type", "hash", "id"):
+            match = re.search(r"vInfo\.%s\s*=\s*'([^']*)'" % key, html)
+            vinfo[key] = match.group(1) if match else ""
+        data = {"d": kodik_value(html, "domain"), "d_sign": kodik_value(html, "d_sign"),
+                "pd": kodik_value(html, "pd"), "pd_sign": kodik_value(html, "pd_sign"),
+                "ref": kodik_value(html, "ref"), "ref_sign": kodik_value(html, "ref_sign"),
+                "bad_user": "false", "cdn_is_working": "0",
+                "type": vinfo.get("type") or "seria", "hash": vinfo.get("hash") or seria_hash,
+                "id": vinfo.get("id") or seria_id}
+        request = urllib.request.Request(
+            KODIK + "/ftor", data=urllib.parse.urlencode(data).encode(),
+            headers={"User-Agent": UA, "Referer": page, "Origin": KODIK,
+                     "Content-Type": "application/x-www-form-urlencoded; charset=UTF-8",
+                     "X-Requested-With": "XMLHttpRequest",
+                     "Accept": "application/json, text/javascript, */*; q=0.01",
+                     "Accept-Encoding": "gzip"})
+        with urllib.request.urlopen(request, timeout=45) as response:
+            raw = response.read()
+            if response.headers.get("Content-Encoding") == "gzip":
+                raw = gzip.decompress(raw)
+        payload = json.loads(raw.decode("utf-8", "ignore"))
+        streams = []
+        for name, variants in (payload.get("links") or {}).items():
+            for variant in variants:
+                link = kodik_decode(variant.get("src", ""))
+                if link.startswith("//"):
+                    link = "https:" + link
+                if not link.startswith("http"):
+                    continue
+                streams.append({"quality": ("%sp" % name) if str(name).isdigit() else str(name),
+                                "hls": link, "format": variant.get("type", "")})
+        streams.sort(key=lambda item: int(re.sub(r"\D", "", item["quality"]) or 0))
+        return {"default": payload.get("default"), "streams": streams}
+
+
+SESSION = RezkaSession()
+KODIK_SESSION = KodikSession()
+TOKEN = ""
 CONFIG = {}
 
 
@@ -353,9 +527,27 @@ class Handler(BaseHTTPRequestHandler):
                                          for match in re.finditer(r"\[([^\]]+)\](https?://\S+)",
                                                                   str(response.get("subtitle") or ""))]}
                 self._send(payload, 200 if payload["success"] else 502)
+            elif action == "kodik":
+                url = self._param(params, "url", "")
+                media_id = self._param(params, "media_id")
+                media_hash = self._param(params, "media_hash")
+                try:
+                    self._send(KODIK_SESSION.catalog(url=url if url.startswith("http") else None,
+                                                     media_id=media_id, media_hash=media_hash))
+                except ValueError as error:
+                    self._send({"error": str(error)}, 400)
+            elif action == "kodik_stream":
+                seria, hashed = self._param(params, "id", ""), self._param(params, "hash", "")
+                if not (seria and hashed):
+                    self._send({"error": "нужны параметры id и hash серии"}, 400)
+                    return
+                result = KODIK_SESSION.stream(seria, hashed)
+                result["success"] = bool(result["streams"])
+                self._send(result, 200 if result["streams"] else 502)
             else:
                 self._send({"error": "неизвестный метод",
-                            "methods": ["health", "search", "info", "episodes", "stream"]}, 404)
+                            "methods": ["health", "search", "info", "episodes", "stream",
+                                        "kodik", "kodik_stream"]}, 404)
         except Exception as error:  # noqa: BLE001 — сервис должен отвечать, а не падать
             log("ошибка обработки %s: %r", self.path, error)
             self._send({"error": str(error)}, 500)

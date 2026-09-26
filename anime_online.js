@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.12.2';
+  var VERSION = '1.13.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -19,6 +19,51 @@
 
   function proxyUrl(url) {
     return CORS_PROXY + encodeURIComponent(url);
+  }
+
+  /* -------------------------------------------------------------------- */
+  /* Сервис на VPS: разбирает плеер Kodik и отдаёт прямые HLS-ссылки.       */
+  /*                                                                       */
+  /* В самом плеере Kodik озвучка и серия выбираются мышкой по селектам —   */
+  /* с пульта туда не попасть, поэтому списки строит Lampa, а видео играет  */
+  /* её собственный плеер.                                                 */
+  /* -------------------------------------------------------------------- */
+
+  var EXTRACTOR_TOKEN = 'aae367a1303194a38cbfb7ad146f68e2';
+  var EXTRACTORS = [
+    'https://94.156.237.213.nip.io:8443/kino/' + EXTRACTOR_TOKEN,
+    'https://lampa-anime-proxy.rammthaok.workers.dev/kino/' + EXTRACTOR_TOKEN
+  ];
+  var activeExtractor = 0;
+
+  function backToContent() {
+    Lampa.Controller.toggle('content');
+  }
+
+  function extractorApi(action, params, success, error) {
+    var pairs = [];
+    for (var key in params) {
+      if (params.hasOwnProperty(key) && params[key] != null && params[key] !== '') {
+        pairs.push(encodeURIComponent(key) + '=' + encodeURIComponent(params[key]));
+      }
+    }
+    var query = pairs.length ? '?' + pairs.join('&') : '';
+    var remembered = Lampa.Storage.get('kino_extractor', '');
+
+    function attempt(index) {
+      var network = new Lampa.Reguest();
+      network.timeout(!remembered && index === activeExtractor ? 8000 : 25000);
+      network.silent(EXTRACTORS[index] + '/' + action + query, function (data) {
+        activeExtractor = index;
+        Lampa.Storage.set('kino_extractor', String(index));
+        success(data);
+      }, function () {
+        if (index + 1 < EXTRACTORS.length) attempt(index + 1);
+        else if (error) error();
+      });
+    }
+
+    attempt(activeExtractor);
   }
 
   function absolute(url) {
@@ -267,9 +312,7 @@
         var json;
         try { json = typeof answer === 'string' ? JSON.parse(answer) : answer; } catch (e) {}
         if (!json || !json.success || !json.data) return Lampa.Noty.show('YummyAnime.TV не вернул ссылку плеера');
-        showFrame(String(json.data).replace(/\\\//g, '/'), 'YummyAnime.TV · ' + choice.title, function () {
-          Lampa.Controller.toggle('content');
-        });
+        openKodik(String(json.data).replace(/\\\//g, '/'), choice, movie);
       }, function () {
         Lampa.Loading.stop();
         Lampa.Noty.show('Не удалось получить плеер YummyAnime.TV');
@@ -277,6 +320,102 @@
     }, function () {
       Lampa.Loading.stop();
       Lampa.Noty.show('Не удалось открыть релиз YummyAnime.TV');
+    });
+  }
+
+  /* -------------------------------------------------------------------- */
+  /* Kodik через сервис: озвучка и серия выбираются в Lampa, видео играет   */
+  /* её плеер (прямой HLS). Если сервис не ответил — старый путь, iframe.   */
+  /* -------------------------------------------------------------------- */
+
+  function openKodik(link, choice, movie) {
+    var releaseTitle = 'YummyAnime.TV · ' + choice.title;
+    Lampa.Loading.start();
+    extractorApi('kodik', { url: link }, function (catalog) {
+      Lampa.Loading.stop();
+      showKodikTranslations(link, releaseTitle, movie, catalog);
+    }, function () {
+      Lampa.Loading.stop();
+      showFrame(link, releaseTitle, backToContent);
+    });
+  }
+
+  function showKodikTranslations(link, releaseTitle, movie, catalog) {
+    var list = (catalog && catalog.translations) || [];
+    if (!list.length) return showFrame(link, releaseTitle, backToContent);
+    var items = list.map(function (item) {
+      return {
+        title: item.title + (item.count ? ' (' + seriesCountLabel(item.count) + ')' : ''),
+        subtitle: item.type === 'subtitles' ? 'субтитры' : 'озвучка',
+        translation: item
+      };
+    });
+    Lampa.Select.show({
+      title: 'YummyAnime.TV: выберите озвучку',
+      items: items,
+      onBack: backToContent,
+      onSelect: function (picked) {
+        showKodikEpisodes(link, releaseTitle, movie, catalog, picked.translation);
+      }
+    });
+  }
+
+  function showKodikEpisodes(link, releaseTitle, movie, catalog, translation) {
+    Lampa.Loading.start();
+    extractorApi('kodik', { media_id: translation.media_id, media_hash: translation.media_hash }, function (data) {
+      Lampa.Loading.stop();
+      var episodes = (data && data.episodes) || [];
+      if (!episodes.length) return showFrame(link, releaseTitle, backToContent);
+      var items = episodes.map(function (episode) {
+        return { title: episode.title || ('Серия ' + episode.number), subtitle: releaseTitle, episode: episode };
+      });
+      Lampa.Select.show({
+        title: translation.title + ' — выберите серию',
+        items: items,
+        onBack: function () {
+          showKodikTranslations(link, releaseTitle, movie, catalog);
+        },
+        onSelect: function (picked) {
+          playKodik(link, releaseTitle, movie, catalog, translation, picked.episode);
+        }
+      });
+    }, function () {
+      Lampa.Loading.stop();
+      showFrame(link, releaseTitle, backToContent);
+    });
+  }
+
+  function playKodik(link, releaseTitle, movie, catalog, translation, episode) {
+    Lampa.Loading.start();
+    extractorApi('kodik_stream', { id: episode.id, hash: episode.hash }, function (data) {
+      Lampa.Loading.stop();
+      var streams = (data && data.streams) || [];
+      var quality = {};
+      streams.forEach(function (entry) { if (entry.hls) quality[entry.quality] = entry.hls; });
+      var order = ['1080p', '720p', '480p', '360p'];
+      var best = '';
+      for (var index = 0; index < order.length && !best; index++) best = quality[order[index]] || '';
+      if (!best) {
+        for (var name in quality) { if (quality.hasOwnProperty(name)) { best = quality[name]; break; } }
+      }
+      if (!best) return Lampa.Noty.show('Kodik не отдал поток для этой серии');
+
+      var number = episode.number;
+      var entry = {
+        url: best,
+        title: releaseTitle + ' — серия ' + number,
+        quality: quality,
+        season: 1,
+        episode: number,
+        card: movie,
+        timeline: episodeTimeline(movie, 1, number)
+      };
+      entry.playlist = [entry];
+      Lampa.Player.play(entry);
+      Lampa.Player.playlist(entry.playlist);
+    }, function () {
+      Lampa.Loading.stop();
+      Lampa.Noty.show('Не удалось получить поток Kodik');
     });
   }
 
@@ -643,4 +782,7 @@
   };
 
   console.log('[Anime Online] loaded', VERSION);
+
+  /* Отладочный вход: из консоли можно дёрнуть сервис Kodik напрямую. */
+  window.__anime = { version: VERSION, api: extractorApi, kodik: openKodik, open: openAnime };
 })();
