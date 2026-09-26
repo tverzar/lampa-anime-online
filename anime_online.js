@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.17.0';
+  var VERSION = '1.18.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -35,6 +35,7 @@
     'https://lampa-anime-proxy.rammthaok.workers.dev/kino/' + EXTRACTOR_TOKEN
   ];
   var activeExtractor = 0;
+  var directAlive = false;
 
   function backToContent() {
     Lampa.Controller.toggle('content');
@@ -52,9 +53,10 @@
 
     function attempt(index) {
       var network = new Lampa.Reguest();
-      network.timeout(!remembered && index === activeExtractor ? 8000 : 25000);
+      network.timeout(25000);
       network.silent(EXTRACTORS[index] + '/' + action + query, function (data) {
         activeExtractor = index;
+        if (index === 0) directAlive = true;
         Lampa.Storage.set('kino_extractor', String(index));
         success(data);
       }, function () {
@@ -410,15 +412,25 @@
     return EXTRACTORS[activeExtractor] || EXTRACTORS[0];
   }
 
+  /* Видео и отчёты гоняем по прямому адресу: через Cloudflare-мост большой
+     поток идёт медленно и легко обрывается. Мост — только если прямой
+     адрес вообще не отвечал. */
+  function streamBase() {
+    if (directAlive || !activeExtractor) return EXTRACTORS[0];
+    return EXTRACTORS[activeExtractor] || EXTRACTORS[0];
+  }
+
   /* Отчёты на наш сервер: по ним видно, что делает телевизор и где рвётся.
      Читается в /var/log/kino-plugin.log на VPS. */
   function report(kind, message) {
+    var text = String(message == null ? '' : message).slice(0, 900);
+    var url = EXTRACTORS[0] + '/log?kind=' + encodeURIComponent(kind) + '&msg=' + encodeURIComponent(text);
     try {
-      var base = extractorBase();
-      var url = base + '/log?kind=' + encodeURIComponent(kind) +
-        '&msg=' + encodeURIComponent(String(message || '').slice(0, 1500));
       if (window.fetch) window.fetch(url, { mode: 'no-cors', cache: 'no-store' }).catch(function () { });
-      else { var image = new Image(); image.src = url; }
+    } catch (error) { /* пробуем маяком ниже */ }
+    try {
+      var image = new Image();
+      image.src = url + '&beacon=' + Date.now();
     } catch (error) { /* журнал не должен мешать просмотру */ }
   }
 
@@ -438,8 +450,12 @@
   }
 
   function watchVideo(number) {
-    [4000, 12000, 25000].forEach(function (delay) {
-      setTimeout(function () { report('video', 'серия ' + number + ': ' + videoState()); }, delay);
+    [1000, 3000, 6000, 10000, 15000, 25000].forEach(function (delay) {
+      setTimeout(function () {
+        var state = 'сбой замера';
+        try { state = videoState(); } catch (error) { state = 'ошибка замера: ' + (error && error.message); }
+        report('video', 'серия ' + number + ' +' + (delay / 1000) + 'с: ' + state);
+      }, delay);
     });
   }
 
@@ -452,7 +468,7 @@
   var proxyNoticeShown = false;
 
   function proxiedStream(url) {
-    var base = extractorBase();
+    var base = streamBase();
     return base + '/playlist.m3u8?url=' + encodeURIComponent(url) + '&base=' + encodeURIComponent(base);
   }
 
@@ -513,8 +529,19 @@
     entry.playlist = [entry];
     report('play', 'серия ' + number + ' | качества ' + Object.keys(quality).join('/') +
       ' | поток ' + String(url).slice(0, 70));
-    Lampa.Player.play(entry);
-    Lampa.Player.playlist(entry.playlist);
+    try {
+      Lampa.Player.play(entry);
+      report('play-step', 'плеер открылся: ' + number);
+    } catch (error) {
+      report('js-error', 'Lampa.Player.play упал: ' + (error && error.message));
+      return;
+    }
+    try {
+      Lampa.Player.playlist(entry.playlist);
+      report('play-step', 'плейлист отдан: ' + number);
+    } catch (error) {
+      report('js-error', 'Lampa.Player.playlist упал: ' + (error && error.message));
+    }
     watchVideo(number);
   }
 
@@ -948,6 +975,13 @@
   try {
     window.addEventListener('error', function (event) {
       report('js-error', (event && event.message) + ' @ ' + (event && event.filename) + ':' + (event && event.lineno));
+    });
+  } catch (error) { /* среда без addEventListener */ }
+
+  try {
+    window.addEventListener('unhandledrejection', function (event) {
+      var reason = event && event.reason;
+      report('js-error', 'промис отклонён: ' + ((reason && (reason.message || reason)) || 'без описания'));
     });
   } catch (error) { /* среда без addEventListener */ }
 
