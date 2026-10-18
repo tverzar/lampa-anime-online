@@ -19,7 +19,7 @@ function chainable() {
 }
 
 const calls = { selects: [], plays: [], notes: [], api: [] };
-const values = { aprel_login: 'Lojkaobeda', aprel_password: 'secret' };
+const values = { aprel_login: 'demo_user', aprel_password: 'demo_pass' };
 
 const Lampa = {
   Component: { add: () => {} },

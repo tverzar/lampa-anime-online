@@ -1,0 +1,32 @@
+#!/bin/sh
+# Не даём закоммитить настоящий пароль.
+#
+# Репозиторий публичный, а плагин раздаётся с GitHub Pages — поэтому пароли
+# и логины живут только в /etc/kino-extractor.json на сервере и в настройках
+# Lampa. В коде допускаются лишь очевидные заглушки.
+#
+# Включить: git config core.hooksPath .githooks
+
+allowed='test|demo|example|placeholder|change_me|your_|xxx|\*\*\*'
+
+staged=$(git diff --cached --name-only --diff-filter=ACM -- '*.js' '*.py' '*.json' '*.md' '*.sh' '*.conf' '*.toml' '*.yml' '*.yaml' 2>/dev/null)
+[ -z "$staged" ] && exit 0
+
+found=$(git diff --cached -U0 -- $staged 2>/dev/null \
+  | grep -E '^\+' \
+  | grep -viE "$allowed" \
+  | grep -iE '(password|passwd|pwd)[[:space:]]*[:=][[:space:]]*["'"'"'][^"'"'"']{6,}["'"'"']' \
+  | head -5)
+
+if [ -n "$found" ]; then
+  echo "Коммит остановлен: похоже на настоящий пароль в коде." >&2
+  echo "" >&2
+  echo "$found" | sed 's/^/    /' >&2
+  echo "" >&2
+  echo "Пароли храним только на сервере (/etc/kino-extractor.json) и в настройках Lampa." >&2
+  echo "В коде оставляйте заглушки: test, demo, example, placeholder." >&2
+  echo "Если это ложное срабатывание: git commit --no-verify" >&2
+  exit 1
+fi
+
+exit 0

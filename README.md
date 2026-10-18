@@ -343,6 +343,16 @@ journalctl -u kino-extractor | grep отказал    # что не пустил
 awk '{print $1}' /var/log/nginx/kino-access.log | sort | uniq -c | sort -rn | head
 ```
 
+**Пароли в репозиторий не попадают.** Репозиторий публичный, поэтому логины и пароли живут только
+в `/etc/kino-extractor.json` на сервере и в настройках Lampa. В коде допустимы лишь заглушки
+(`test`, `demo`, `example`, `placeholder`). Перед коммитом стоит включить проверку:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+Хук `.githooks/pre-commit` не даст закоммитить присвоение пароля в кавычках (ложное срабатывание обходится `--no-verify`).
+
 Конфиг nginx лежит в репозитории: `nginx/kino-https.conf` и `nginx/kino-proxy.conf` (копировать в `/etc/nginx/conf.d/` и `/etc/nginx/snippets/`).
 
 ## Ограничения
