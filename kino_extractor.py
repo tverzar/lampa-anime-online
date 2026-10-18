@@ -33,7 +33,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.10.0"
+VERSION = "1.10.1"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -635,29 +635,6 @@ CONFIG = {}
 CONFIG_PATH = ""
 
 
-def save_credentials(name, password, site="rezka"):
-    """Сохранить вход в конфиг, чтобы он пережил перезапуск службы."""
-    global CONFIG
-    if not CONFIG_PATH:
-        return False
-    prefix = "aprel" if site == "aprel" else "rezka"
-    CONFIG[prefix + "_login"] = name
-    CONFIG[prefix + "_password"] = password
-    try:
-        temporary = CONFIG_PATH + ".tmp"
-        with open(temporary, "w", encoding="utf-8") as handle:
-            json.dump(CONFIG, handle, ensure_ascii=False, indent=2)
-        os.replace(temporary, CONFIG_PATH)
-        try:
-            os.chmod(CONFIG_PATH, 0o600)
-        except OSError:
-            pass
-        return True
-    except Exception as error:  # noqa: BLE001 — не роняем сервис из-за файла
-        log("не смог сохранить вход в конфиг: %r", error)
-        return False
-
-
 LOG_FILE = "/var/log/kino-plugin.log"
 
 
@@ -1009,16 +986,14 @@ class Handler(BaseHTTPRequestHandler):
             authorized = APREL_SESSION.login(name, password)
             if authorized:
                 APREL_SESSION.credentials = (name, password)
-                saved = save_credentials(name, password, "aprel")
-                self._send({"ok": True, "user": True, "saved": saved})
+                self._send({"ok": True, "user": True})
             else:
                 self._send({"ok": False, "error": "Aprel не принял логин или пароль"}, 401)
             return
         authorized = SESSION.login(name, password)
         if authorized:
             SESSION.credentials = (name, password)
-            saved = save_credentials(name, password)
-            self._send({"ok": True, "user": True, "saved": saved})
+            self._send({"ok": True, "user": True})
         else:
             self._send({"ok": False, "error": "сайт не принял логин или пароль"}, 401)
 

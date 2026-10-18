@@ -4,7 +4,7 @@
   if (window.kino_online_plugin) return;
   window.kino_online_plugin = true;
 
-  var VERSION = '2.2.0';
+  var VERSION = '2.2.1';
 
   /* -------------------------------------------------------------------- */
   /* Источник 1 — HDrezka через свой серверный экстрактор.                 */
@@ -503,7 +503,7 @@
     });
   }
 
-  function chooseAprel(movie) {
+  function chooseAprel(movie, retried) {
     var query = queryFor(movie);
     if (!query) return Lampa.Noty.show('Не удалось определить название');
     Lampa.Loading.start();
@@ -618,7 +618,7 @@
     try { Lampa.Noty.show(message); } catch (error) { /* нет уведомлений */ }
   }
 
-  function postLogin(path, name, password, label, done) {
+  function postLogin(path, name, password, label, done, silent) {
     if (!name || !password) {
       if (done) done(false);
       return false;
@@ -629,8 +629,10 @@
        OPTIONS, а сервис всё равно разбирает тело как форму */
     var body = 'login=' + encodeURIComponent(name) + '&password=' + encodeURIComponent(password);
     var finish = function (ok, message) {
-      if (ok) notify(label + ': вход выполнен, качества будут выше');
-      else notify(label + ': ' + (message || 'вход не удался'));
+      if (!silent) {
+        if (ok) notify(label + ': вход выполнен, качества будут выше');
+        else notify(label + ': ' + (message || 'вход не удался'));
+      }
       if (done) done(ok);
     };
 
@@ -665,14 +667,14 @@
     }
   }
 
-  function loginToRezka(done) {
+  function loginToRezka(done, silent) {
     return postLogin('/login', String(paramValue('rezka_login', '') || '').trim(),
-      String(paramValue('rezka_password', '') || ''), 'HDrezka', done);
+      String(paramValue('rezka_password', '') || ''), 'HDrezka', done, silent);
   }
 
-  function loginToAprel(done) {
+  function loginToAprel(done, silent) {
     return postLogin('/aprel_login', String(paramValue('aprel_login', '') || '').trim(),
-      String(paramValue('aprel_password', '') || ''), 'Aprel', done);
+      String(paramValue('aprel_password', '') || ''), 'Aprel', done, silent);
   }
 
   function addSettings() {
@@ -741,7 +743,10 @@
   /* если логин уже введён — повторяем вход при каждом запуске: сессия на
      сервере живёт в памяти и после его перезапуска пропадает */
   loginToRezka();
-  loginToAprel();
+  loginToAprel(function (ok) {
+    if (!ok) return;
+    try { Lampa.Storage.set('aprel_ready', '1'); } catch (error) { /* нет хранилища */ }
+  }, true);
   checkAprel();
 
   console.log('[Kino Online] loaded', VERSION);
