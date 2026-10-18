@@ -10,7 +10,7 @@
   if (window.lampa_online_all) return;
   window.lampa_online_all = true;
 
-  var VERSION = '1.1.6';
+  var VERSION = '1.1.7';
 
   var BUNDLE = [
     {
@@ -18,7 +18,7 @@
       loaded: function () { return !!window.anime_online_plugin; },
       urls: [
         'https://tverzar.github.io/lampa-anime-online/anime_online.js',
-        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@b96aa61/anime_online.js'
+        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@20f80fb/anime_online.js'
       ]
     },
     {
@@ -26,7 +26,7 @@
       loaded: function () { return !!window.kino_online_plugin; },
       urls: [
         'https://tverzar.github.io/lampa-anime-online/kino_online.js',
-        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@b96aa61/kino_online.js'
+        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@20f80fb/kino_online.js'
       ]
     }
   ];
