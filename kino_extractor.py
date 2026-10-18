@@ -33,7 +33,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.10.1"
+VERSION = "1.11.0"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -383,7 +383,58 @@ class AprelSession:
                 break
         return items
 
-    def stream(self, page_url):
+    @staticmethod
+    def _balanced(text, start):
+        """Читает сбалансированный JSON-массив из текста, начиная с '['."""
+        depth = 0
+        in_str = False
+        esc = False
+        for i in range(start, len(text)):
+            ch = text[i]
+            if in_str:
+                if esc:
+                    esc = False
+                elif ch == "\\":
+                    esc = True
+                elif ch == '"':
+                    in_str = False
+                continue
+            if ch == '"':
+                in_str = True
+            elif ch == "[":
+                depth += 1
+            elif ch == "]":
+                depth -= 1
+                if depth == 0:
+                    return text[start:i + 1]
+        return None
+
+    def _seasons(self, embed):
+        """Достаёт seasons:[...] из плеера variyt. None — это фильм, не сериал."""
+        idx = embed.find("seasons:[")
+        if idx < 0:
+            return None
+        raw = self._balanced(embed, embed.find("[", idx))
+        if not raw:
+            return None
+        try:
+            data = json.loads(raw)
+        except ValueError:
+            return None
+        result = []
+        for item in data if isinstance(data, list) else []:
+            if not isinstance(item, dict) or item.get("blocked"):
+                continue
+            episodes = []
+            for ep in item.get("episodes") or []:
+                if isinstance(ep, dict) and ep.get("hls"):
+                    episodes.append(str(ep.get("episode", "")))
+            if episodes:
+                result.append({"season": str(item.get("season", "")), "episodes": episodes})
+        result.sort(key=lambda item: int(re.sub(r"\D", "", item["season"]) or 0))
+        return result or None
+
+    def stream(self, page_url, season=None, episode=None):
         page = self.get(page_url)
         match = APREL_EMBED.search(page)
         if not match:
@@ -393,10 +444,44 @@ class AprelSession:
             embed = self._fetch(embed_url, referer=page_url)[1]
         except Exception as error:  # noqa: BLE001
             return {"success": False, "error": "плеер не открылся: %s" % error}
-        found = APREL_STREAM.search(embed)
-        if not found:
-            return {"success": False, "error": "плеер не отдал ссылку на поток"}
-        master = found.group(0).replace("&amp;", "&")
+
+        seasons = self._seasons(embed)
+        if seasons and not season:
+            """Сериал без указания серии: отдаём список сезонов и серий."""
+            return {"success": True, "serial": True, "seasons": seasons}
+
+        if seasons and season:
+            chosen = None
+            for item in seasons:
+                if str(item["season"]) == str(season):
+                    chosen = item
+                    break
+            if not chosen or str(episode) not in [str(e) for e in chosen["episodes"]]:
+                return {"success": False, "error": "серия не найдена в плеере"}
+        else:
+            chosen = None
+
+        if chosen:
+            idx = embed.find('seasons:[')
+            raw = self._balanced(embed, embed.find('[', idx))
+            data = json.loads(raw)
+            master = None
+            for item in data:
+                if str(item.get("season")) == str(season):
+                    for ep in item.get("episodes") or []:
+                        if str(ep.get("episode")) == str(episode):
+                            master = ep.get("hls")
+                            break
+                if master:
+                    break
+            if not master:
+                return {"success": False, "error": "плеер не отдал ссылку на серию"}
+        else:
+            found = APREL_STREAM.search(embed)
+            if not found:
+                return {"success": False, "error": "плеер не отдал ссылку на поток"}
+            master = found.group(0).replace("&amp;", "&")
+
         try:
             playlist = self._fetch(master)[1]
         except Exception as error:  # noqa: BLE001
@@ -412,7 +497,11 @@ class AprelSession:
             qualities.setdefault("%sp" % resolution.group(2), urllib.parse.urljoin(master, uri))
         if not qualities:
             qualities["auto"] = master
-        return {"success": True, "qualities": qualities, "master": master}
+        result = {"success": True, "qualities": qualities, "master": master}
+        if chosen:
+            result["season"] = str(season)
+            result["episode"] = str(episode)
+        return result
 
 
 APREL_SESSION = AprelSession()
@@ -1112,7 +1201,9 @@ class Handler(BaseHTTPRequestHandler):
                 if not url.startswith("http"):
                     self._send({"error": "нужен параметр url — страница фильма"}, 400)
                     return
-                self._send(APREL_SESSION.stream(url))
+                season = self._param(params, "season", "") or None
+                episode = self._param(params, "episode", "") or None
+                self._send(APREL_SESSION.stream(url, season=season, episode=episode))
             elif action == "log":
                 """Отчёт из плагина: что делает телевизор и где спотыкается."""
                 kind = (self._param(params, "kind", "plugin") or "plugin")[:32]

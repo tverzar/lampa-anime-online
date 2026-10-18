@@ -4,7 +4,7 @@
   if (window.kino_online_plugin) return;
   window.kino_online_plugin = true;
 
-  var VERSION = '2.2.4';
+  var VERSION = '2.3.0';
 
   /* -------------------------------------------------------------------- */
   /* Источник 1 — HDrezka через свой серверный экстрактор.                 */
@@ -541,11 +541,56 @@
       var names = data && data.qualities ? Object.keys(data.qualities).join(', ') : 'нет';
       report('flow', 'aprel_stream ответ: ok=' + !!(data && data.success) + ', качества ' + names);
       if (!data || !data.success) return Lampa.Noty.show((data && data.error) || 'Aprel не отдал поток');
+      if (data.serial && data.seasons && data.seasons.length) {
+        chooseSeason(url, title, movie, data.seasons);
+        return;
+      }
       playAprelStream(data, title, movie);
     }, function (message) {
       report('flow', 'aprel_stream ошибка: ' + (message || 'без описания'));
       Lampa.Loading.stop();
       Lampa.Noty.show(message || 'Aprel не ответил');
+    });
+  }
+
+  function chooseSeason(url, title, movie, seasons) {
+    var items = seasons.map(function (item) {
+      return { title: 'Сезон ' + item.season, subtitle: item.episodes.length + ' серий', season: item.season };
+    });
+    Lampa.Select.show({
+      title: title + ' — сезон',
+      items: items,
+      onBack: function () { Lampa.Controller.toggle('content'); },
+      onSelect: function (picked) { chooseEpisode(url, title, movie, picked.season, seasons); }
+    });
+  }
+
+  function chooseEpisode(url, title, movie, season, seasons) {
+    var chosen = null;
+    for (var i = 0; i < seasons.length; i++) {
+      if (String(seasons[i].season) === String(season)) { chosen = seasons[i]; break; }
+    }
+    if (!chosen) return Lampa.Noty.show('Сезон не найден');
+    var items = chosen.episodes.map(function (number) {
+      return { title: 'Серия ' + number, episode: number };
+    });
+    Lampa.Select.show({
+      title: title + ' — сезон ' + season,
+      items: items,
+      onBack: function () { chooseSeason(url, title, movie, seasons); },
+      onSelect: function (picked) {
+        report('flow', 'выбор: сезон ' + season + ', серия ' + picked.episode);
+        Lampa.Loading.start();
+        api('/aprel_stream', { url: url, season: season, episode: picked.episode }, function (data) {
+          Lampa.Loading.stop();
+          if (!data || !data.success) return Lampa.Noty.show((data && data.error) || 'Aprel не отдал серию');
+          playAprelStream(data, title + ' — ' + season + 'x' + picked.episode, movie);
+        }, function (message) {
+          report('flow', 'aprel_stream серии ошибка: ' + (message || 'без описания'));
+          Lampa.Loading.stop();
+          Lampa.Noty.show(message || 'Aprel не ответил');
+        });
+      }
     });
   }
 
