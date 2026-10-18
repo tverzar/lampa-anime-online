@@ -14,23 +14,23 @@
      флаг), а меню «Аниме / Кино» строит этот загрузчик. */
   window.lampa_online_single = true;
 
-  var VERSION = '1.2.0';
+  var VERSION = '1.2.1';
 
   var BUNDLE = [
     {
       name: 'Аниме онлайн',
       loaded: function () { return !!window.anime_online_plugin; },
       urls: [
-        'https://tverzar.github.io/lampa-anime-online/anime_online.js',
-        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@173325c/anime_online.js'
+        'https://tverzar.github.io/lampa-anime-online/anime_online.js?v=1.23.2',
+        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@344067b/anime_online.js'
       ]
     },
     {
       name: 'Кино онлайн',
       loaded: function () { return !!window.kino_online_plugin; },
       urls: [
-        'https://tverzar.github.io/lampa-anime-online/kino_online.js',
-        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@173325c/kino_online.js'
+        'https://tverzar.github.io/lampa-anime-online/kino_online.js?v=2.2.2',
+        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@344067b/kino_online.js'
       ]
     }
   ];

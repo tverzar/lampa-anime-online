@@ -13,7 +13,7 @@
 **Одна ссылка на всё** — в Lampa → Настройки → Расширения → Добавить плагин:
 
 ```text
-https://tverzar.github.io/lampa-anime-online/online_all.js
+https://tverzar.github.io/lampa-anime-online/online_all.js?v=1.2.1
 ```
 
 `online_all.js` — загрузчик: подтягивает `anime_online.js` и `kino_online.js` с GitHub Pages,
@@ -364,6 +364,12 @@ git config core.hooksPath .githooks
 - Источники пиратские: доступность и реклама зависят от площадок.
 
 ## История версий
+
+**загрузчик 1.2.1**
+
+- Переключил загрузку плагинов с jsdelivr (агрессивный кеш, до нескольких часов) на GitHub Pages
+  с query-параметром `?v=VERSION` — теперь обновления приходят на телевизор сразу после пуша.
+- Резервный адрес jsdelivr обновлён на актуальный коммит.
 
 **загрузчик 1.2.0 + аниме 1.23.2 + кино 2.2.2**
 
