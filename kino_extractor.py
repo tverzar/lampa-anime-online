@@ -33,7 +33,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.9.0"
+VERSION = "1.10.0"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -296,6 +296,127 @@ class RezkaSession:
 SESSION = RezkaSession()
 TOKEN = ""
 
+
+# ---------------------------------------------------------------------------
+# Aprel Kino (aprelteam.gokino.by) — второй источник кино
+#
+# Гостям страницы фильмов закрыты, поэтому сервис логинится сам (DLE-форма).
+# На странице фильма лежит iframe плеера api.variyt.ws/embed/kp/<id>, а тот
+# отдаёт прямой master.m3u8 с вариантами 720p/360p. Ссылка не привязана к IP,
+# так что видео качает сам телевизор, а сервер только добывает адрес.
+# ---------------------------------------------------------------------------
+
+APREL = "https://aprelteam.gokino.by"
+APREL_EMBED = re.compile(r"api\.variyt\.ws/embed/kp/(\d+)")
+APREL_CARD = re.compile(r'<a href="(https?://aprelteam[^"]+?\.html)"[^>]*>\s*<h3[^>]*>(.*?)</h3>', re.S)
+APREL_STREAM = re.compile(r"https?://[^\"'<> ]+\.m3u8[^\"'<> ]*")
+
+
+class AprelSession:
+    """Вход на Aprel Kino и разбор страницы фильма."""
+
+    def __init__(self):
+        self.lock = threading.RLock()
+        self.jar = http.cookiejar.CookieJar()
+        self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
+        self.credentials = None
+        self.authorized = False
+        self.login_tried = False
+
+    def _fetch(self, url, data=None, referer=None, timeout=35):
+        body = urllib.parse.urlencode(data).encode() if isinstance(data, dict) else data
+        request = urllib.request.Request(url, data=body)
+        request.add_header("User-Agent", UA)
+        request.add_header("Accept-Language", "ru-RU,ru;q=0.9")
+        if referer:
+            request.add_header("Referer", referer)
+        with self.opener.open(request, timeout=timeout) as response:
+            return response.status, response.read().decode("utf-8", "ignore")
+
+    def login(self, name, password):
+        with self.lock:
+            self.login_tried = True
+            try:
+                self._fetch(APREL + "/")
+                _, html = self._fetch(APREL + "/",
+                                      {"login_name": name, "login_password": password, "login": "submit"},
+                                      referer=APREL + "/")
+            except Exception as error:  # noqa: BLE001 — сеть/сайт, не роняем сервис
+                log("Aprel: вход не удался: %r", error)
+                self.authorized = False
+                return False
+            cookies = {cookie.name for cookie in self.jar}
+            self.authorized = "dle_user_id" in cookies and "Ошибка авторизации" not in html
+            if self.authorized:
+                log("вход на Aprel выполнен: %s", name)
+            else:
+                log("вход на Aprel не удался: сайт не принял логин или пароль")
+            return self.authorized
+
+    def ensure(self):
+        with self.lock:
+            if self.credentials and not self.authorized and not self.login_tried:
+                self.login(*self.credentials)
+
+    def get(self, url, referer=None):
+        self.ensure()
+        return self._fetch(url, referer=referer)[1]
+
+    @staticmethod
+    def clean_title(raw):
+        """В заголовке карточки лежит кнопка «копировать» со своими стилями."""
+        text = re.sub(r"<(style|script|button)[^>]*>.*?</\1>", " ", raw, flags=re.S | re.I)
+        text = re.sub(r"<[^>]+>", " ", text)
+        return re.sub(r"\s+", " ", text).strip()
+
+    def search(self, query, limit=15):
+        page = self.get(APREL + "/index.php?do=search&subaction=search&story=" + urllib.parse.quote(query))
+        items, seen = [], set()
+        for match in APREL_CARD.finditer(page):
+            url = match.group(1)
+            title = self.clean_title(match.group(2))
+            if not title or url in seen:
+                continue
+            seen.add(url)
+            items.append({"title": title, "url": url})
+            if len(items) >= limit:
+                break
+        return items
+
+    def stream(self, page_url):
+        page = self.get(page_url)
+        match = APREL_EMBED.search(page)
+        if not match:
+            return {"success": False, "error": "у фильма нет совместимого плеера"}
+        embed_url = "https://api.variyt.ws/embed/kp/" + match.group(1)
+        try:
+            embed = self._fetch(embed_url, referer=page_url)[1]
+        except Exception as error:  # noqa: BLE001
+            return {"success": False, "error": "плеер не открылся: %s" % error}
+        found = APREL_STREAM.search(embed)
+        if not found:
+            return {"success": False, "error": "плеер не отдал ссылку на поток"}
+        master = found.group(0).replace("&amp;", "&")
+        try:
+            playlist = self._fetch(master)[1]
+        except Exception as error:  # noqa: BLE001
+            return {"success": False, "error": "плейлист не скачался: %s" % error}
+        qualities, lines = {}, [line.strip() for line in playlist.split("\n")]
+        for index, line in enumerate(lines):
+            if not line.startswith("#EXT-X-STREAM-INF"):
+                continue
+            resolution = re.search(r"RESOLUTION=(\d+)x(\d+)", line)
+            uri = lines[index + 1] if index + 1 < len(lines) else ""
+            if not resolution or not uri or uri.startswith("#"):
+                continue
+            qualities.setdefault("%sp" % resolution.group(2), urllib.parse.urljoin(master, uri))
+        if not qualities:
+            qualities["auto"] = master
+        return {"success": True, "qualities": qualities, "master": master}
+
+
+APREL_SESSION = AprelSession()
+
 # ---------------------------------------------------------------------------
 # Kodik — плеер, который отдаёт новый YummyAnime (yummyanime.tv)
 # ---------------------------------------------------------------------------
@@ -514,13 +635,14 @@ CONFIG = {}
 CONFIG_PATH = ""
 
 
-def save_credentials(name, password):
+def save_credentials(name, password, site="rezka"):
     """Сохранить вход в конфиг, чтобы он пережил перезапуск службы."""
     global CONFIG
     if not CONFIG_PATH:
         return False
-    CONFIG["rezka_login"] = name
-    CONFIG["rezka_password"] = password
+    prefix = "aprel" if site == "aprel" else "rezka"
+    CONFIG[prefix + "_login"] = name
+    CONFIG[prefix + "_password"] = password
     try:
         temporary = CONFIG_PATH + ".tmp"
         with open(temporary, "w", encoding="utf-8") as handle:
@@ -859,7 +981,7 @@ class Handler(BaseHTTPRequestHandler):
             self._send({"error": "нужен токен"}, 403)
             return
         action = parts[1] if len(parts) > 1 else ""
-        if action != "login":
+        if action not in ("login", "aprel_login"):
             self._send({"error": "неизвестное действие"}, 404)
             return
         try:
@@ -882,6 +1004,15 @@ class Handler(BaseHTTPRequestHandler):
         password = str(data.get("password") or "")
         if not name or not password:
             self._send({"error": "нужны логин и пароль"}, 400)
+            return
+        if action == "aprel_login":
+            authorized = APREL_SESSION.login(name, password)
+            if authorized:
+                APREL_SESSION.credentials = (name, password)
+                saved = save_credentials(name, password, "aprel")
+                self._send({"ok": True, "user": True, "saved": saved})
+            else:
+                self._send({"ok": False, "error": "Aprel не принял логин или пароль"}, 401)
             return
         authorized = SESSION.login(name, password)
         if authorized:
@@ -917,6 +1048,7 @@ class Handler(BaseHTTPRequestHandler):
             if action == "health":
                 self._send({"ok": True, "version": VERSION, "rezka_ready": SESSION.ready,
                             "anubis_solves": SESSION.solves, "rezka_user": SESSION.authorized,
+                            "aprel_user": APREL_SESSION.authorized,
                             "client_ip": geo_ip})
             elif action == "search":
                 query = (self._param(params, "q", "") or "").strip()
@@ -993,6 +1125,19 @@ class Handler(BaseHTTPRequestHandler):
                 result["success"] = bool(result.get("streams"))
                 remember_payload(result)
                 self._send(result, 200 if result.get("streams") else 502)
+            elif action == "aprel_search":
+                query = self._param(params, "q", "")
+                if not query:
+                    self._send({"error": "нужен параметр q"}, 400)
+                    return
+                items = APREL_SESSION.search(query)
+                self._send({"query": query, "items": items, "user": APREL_SESSION.authorized})
+            elif action == "aprel_stream":
+                url = self._param(params, "url", "")
+                if not url.startswith("http"):
+                    self._send({"error": "нужен параметр url — страница фильма"}, 400)
+                    return
+                self._send(APREL_SESSION.stream(url))
             elif action == "log":
                 """Отчёт из плагина: что делает телевизор и где спотыкается."""
                 kind = (self._param(params, "kind", "plugin") or "plugin")[:32]
@@ -1101,6 +1246,11 @@ def main():
     if login_name and login_password:
         SESSION.credentials = (login_name, login_password)
         log("настроен вход в HDrezka: %s", login_name)
+    aprel_name = str(CONFIG.get("aprel_login") or "").strip()
+    aprel_password = str(CONFIG.get("aprel_password") or "")
+    if aprel_name and aprel_password:
+        APREL_SESSION.credentials = (aprel_name, aprel_password)
+        log("настроен вход на Aprel: %s", aprel_name)
     port = arguments.port or int(CONFIG.get("port") or 8791)
     log("kino-extractor %s запущен на %s:%d", VERSION, arguments.host, port)
     threading.Thread(target=SESSION.solve, daemon=True).start()

@@ -4,7 +4,7 @@
   if (window.kino_online_plugin) return;
   window.kino_online_plugin = true;
 
-  var VERSION = '2.1.0';
+  var VERSION = '2.2.0';
 
   /* -------------------------------------------------------------------- */
   /* Источник 1 — HDrezka через свой серверный экстрактор.                 */
@@ -470,9 +470,100 @@
     });
   }
 
+  /* -------------------------------------------------------------------- */
+  /* Aprel Kino — второй источник: логин на сайте, 720p прямым потоком      */
+  /*                                                                       */
+  /* Гостям страницы фильмов закрыты, поэтому вход делает наш сервис. Со    */
+  /* страницы фильма он достаёт прямой master.m3u8 (720p/360p), а видео     */
+  /* качает сам телевизор — ссылка не привязана к IP.                      */
+  /* -------------------------------------------------------------------- */
+
+  function playAprelStream(data, title, movie) {
+    var qualities = (data && data.qualities) || {};
+    var streams = Object.keys(qualities).map(function (name) {
+      return { quality: name, hls: qualities[name] };
+    });
+    var best = bestOf(streams);
+    if (!best) return Lampa.Noty.show('Aprel: качества не найдены');
+    var quality = qualityMap(streams);
+    var entry = safeEntry({ url: best.hls, title: title, quality: quality, card: plainCard(movie) });
+    Lampa.Player.play(entry);
+    Lampa.Player.playlist([{ url: best.hls, title: title, quality: quality }]);
+  }
+
+  function openAprel(url, title, movie) {
+    Lampa.Loading.start();
+    api('/aprel_stream', { url: url }, function (data) {
+      Lampa.Loading.stop();
+      if (!data || !data.success) return Lampa.Noty.show((data && data.error) || 'Aprel не отдал поток');
+      playAprelStream(data, title, movie);
+    }, function (message) {
+      Lampa.Loading.stop();
+      Lampa.Noty.show(message || 'Aprel не ответил');
+    });
+  }
+
+  function chooseAprel(movie) {
+    var query = queryFor(movie);
+    if (!query) return Lampa.Noty.show('Не удалось определить название');
+    Lampa.Loading.start();
+    api('/aprel_search', { q: query }, function (data) {
+      Lampa.Loading.stop();
+      var items = (data && data.items) || [];
+      if (!items.length) return Lampa.Noty.show('Aprel: ничего не найдено');
+      var choices = items.slice(0, 20).map(function (item) {
+        return { title: item.title, subtitle: 'Aprel · 720p', url: item.url };
+      });
+      Lampa.Select.show({
+        title: 'Aprel: выберите фильм',
+        items: choices,
+        onBack: function () { Lampa.Controller.toggle('content'); },
+        onSelect: function (choice) { openAprel(choice.url, choice.title, movie); }
+      });
+    }, function (message) {
+      Lampa.Loading.stop();
+      Lampa.Noty.show(message || 'Aprel не ответил');
+    });
+  }
+
+  /* Готов ли Aprel: либо логин введён тут, либо сервер уже авторизован
+     (тогда пароль на телевизоре вводить не нужно). */
+  function aprelReady() {
+    if (String(paramValue('aprel_login', '') || '').trim() &&
+        String(paramValue('aprel_password', '') || '')) return true;
+    try { return Lampa.Storage.get('aprel_ready', '') === '1'; } catch (error) { return false; }
+  }
+
+  function checkAprel(done) {
+    api('/health', {}, function (data) {
+      var ready = !!(data && data.aprel_user);
+      try { Lampa.Storage.set('aprel_ready', ready ? '1' : '0'); } catch (error) { /* нет хранилища */ }
+      if (done) done(ready);
+    }, function () { if (done) done(false); });
+  }
+
+  function askSource(movie) {
+    Lampa.Select.show({
+      title: 'Источник',
+      items: [
+        { title: 'Aprel', subtitle: '720p · по логину, без ограничений Rezka', source: 'aprel' },
+        { title: 'HDrezka', subtitle: 'до 480p гостем, выше с аккаунтом', source: 'rezka' }
+      ],
+      onBack: function () { Lampa.Controller.toggle('content'); },
+      onSelect: function (item) {
+        if (item.source === 'aprel') chooseAprel(movie);
+        else openRezka(movie);
+      }
+    });
+  }
+
   function openKino(movie) {
     if (!queryFor(movie)) return Lampa.Noty.show('Не удалось определить название');
-    openRezka(movie);
+    if (aprelReady()) return askSource(movie);
+    checkAprel(function (ready) {
+      if (ready) askSource(movie);
+      else openRezka(movie);
+    });
   }
 
   /* -------------------------------------------------------------------- */
@@ -484,7 +575,7 @@
     var root = event.object.activity.render();
     if (root.find('.view--kino-online').length) return;
 
-    var button = $('<div class="full-start__button selector view--kino-online" data-subtitle="HDrezka + Kinokrad · ' + VERSION + '">' +
+    var button = $('<div class="full-start__button selector view--kino-online" data-subtitle="Aprel + HDrezka · ' + VERSION + '">' +
       '<svg viewBox="0 0 24 24" width="24" height="24"><path fill="currentColor" d="M3 5h18v14H3zM5 7v10h14V7H5zm3 2 5 3-5 3V9z"/></svg>' +
       '<span>Кино онлайн</span>' +
     '</div>');
@@ -527,21 +618,19 @@
     try { Lampa.Noty.show(message); } catch (error) { /* нет уведомлений */ }
   }
 
-  function loginToRezka(done) {
-    var name = String(paramValue('rezka_login', '') || '').trim();
-    var password = String(paramValue('rezka_password', '') || '');
+  function postLogin(path, name, password, label, done) {
     if (!name || !password) {
       if (done) done(false);
       return false;
     }
 
-    var url = EXTRACTORS[0] + '/login';
+    var url = EXTRACTORS[0] + path;
     /* text/plain — «простой» запрос: веб-вью не делает предварительный
        OPTIONS, а сервис всё равно разбирает тело как форму */
     var body = 'login=' + encodeURIComponent(name) + '&password=' + encodeURIComponent(password);
     var finish = function (ok, message) {
-      if (ok) notify('HDrezka: вход выполнен, качества будут выше');
-      else notify('HDrezka: ' + (message || 'вход не удался'));
+      if (ok) notify(label + ': вход выполнен, качества будут выше');
+      else notify(label + ': ' + (message || 'вход не удался'));
       if (done) done(ok);
     };
 
@@ -576,6 +665,16 @@
     }
   }
 
+  function loginToRezka(done) {
+    return postLogin('/login', String(paramValue('rezka_login', '') || '').trim(),
+      String(paramValue('rezka_password', '') || ''), 'HDrezka', done);
+  }
+
+  function loginToAprel(done) {
+    return postLogin('/aprel_login', String(paramValue('aprel_login', '') || '').trim(),
+      String(paramValue('aprel_password', '') || ''), 'Aprel', done);
+  }
+
   function addSettings() {
     var api = window.Lampa && Lampa.SettingsApi;
     if (!api || typeof api.addComponent !== 'function' || typeof api.addParam !== 'function') return;
@@ -603,6 +702,24 @@
         },
         onChange: function () { loginToRezka(); }
       });
+      api.addParam({
+        component: 'kino_online',
+        param: { name: 'aprel_login', type: 'input', default: '' },
+        field: {
+          name: 'Логин Aprel Kino',
+          description: 'Второй источник: aprelteam.gokino.by. Гостям фильмы закрыты, поэтому нужен аккаунт. Даёт 720p прямым потоком без ограничений Rezka.'
+        },
+        onChange: function () { loginToAprel(); }
+      });
+      api.addParam({
+        component: 'kino_online',
+        param: { name: 'aprel_password', type: 'input', default: '' },
+        field: {
+          name: 'Пароль Aprel Kino',
+          description: 'Хранится в настройках Lampa и уходит на ваш сервер в теле запроса. После ввода появится выбор источника при запуске фильма.'
+        },
+        onChange: function () { loginToAprel(); }
+      });
     } catch (error) {
       console.log('[Kino Online] настройки не создались:', error && error.message);
     }
@@ -624,6 +741,8 @@
   /* если логин уже введён — повторяем вход при каждом запуске: сессия на
      сервере живёт в памяти и после его перезапуска пропадает */
   loginToRezka();
+  loginToAprel();
+  checkAprel();
 
   console.log('[Kino Online] loaded', VERSION);
 })();
