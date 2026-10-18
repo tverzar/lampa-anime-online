@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.23.0';
+  var VERSION = '1.23.1';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -1063,6 +1063,7 @@
     var api = window.Lampa && Lampa.SettingsApi;
 
     if (api && typeof api.addComponent === 'function' && typeof api.addParam === 'function') {
+      try {
       api.addComponent({
         component: 'anime_online',
         name: 'Аниме онлайн',
@@ -1097,6 +1098,10 @@
         }
       });
       return;
+      } catch (error) {
+        /* сборка с другим API: раздел не создаём, но плагин не роняем */
+        report('js-error', 'SettingsApi: ' + (error && error.message));
+      }
     }
 
     /* Сборки без SettingsApi: регистрируем хотя бы значения, чтобы чтение
