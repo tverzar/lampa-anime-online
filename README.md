@@ -283,7 +283,7 @@ js-error | Lampa.Player.play упал: JSON.stringify cannot serialize cyclic st
 
 ```bash
 tail -20 /var/log/nginx/kino-access.log        # кто ходил и с каким кодом
-grep " 429 " /var/log/nginx/kino-error.log     # кого притормозили лимиты
+grep "limiting requests" /var/log/nginx/kino-error.log   # кого притормозили лимиты
 journalctl -u kino-extractor | grep отказал    # что не пустил видео-прокси
 ```
 
