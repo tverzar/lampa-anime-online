@@ -21,8 +21,8 @@
       name: 'Аниме онлайн',
       loaded: function () { return !!window.anime_online_plugin; },
       urls: [
-        'https://tverzar.github.io/lampa-anime-online/anime_online.js?v=1.23.2',
-        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@344067b/anime_online.js'
+        'https://tverzar.github.io/lampa-anime-online/anime_online.js?v=1.24.0',
+        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@c677900/anime_online.js'
       ]
     },
     {
