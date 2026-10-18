@@ -29,7 +29,7 @@
       name: 'Кино онлайн',
       loaded: function () { return !!window.kino_online_plugin; },
       urls: [
-        'https://tverzar.github.io/lampa-anime-online/kino_online.js?v=2.2.3',
+        'https://tverzar.github.io/lampa-anime-online/kino_online.js?v=2.2.4',
         'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@5c336d6/kino_online.js'
       ]
     }

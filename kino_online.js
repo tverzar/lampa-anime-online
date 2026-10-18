@@ -4,7 +4,7 @@
   if (window.kino_online_plugin) return;
   window.kino_online_plugin = true;
 
-  var VERSION = '2.2.3';
+  var VERSION = '2.2.4';
 
   /* -------------------------------------------------------------------- */
   /* Источник 1 — HDrezka через свой серверный экстрактор.                 */
@@ -114,8 +114,10 @@
 
     function attempt(index) {
       var network = new Lampa.Reguest();
-      /* первый адрес проверяем быстро: если порт закрыт, сразу уходим на резервный */
-      network.timeout(index === start && !remembered ? 7000 : 25000);
+      /* aprel_stream ходит на Aprel и решает anti-bot (Anubis) — до 10 секунд,
+         обрывать по 7 нельзя. Остальные проверяем быстро на первом адресе. */
+      var heavy = path.indexOf('/aprel_stream') === 0;
+      network.timeout(heavy ? 40000 : (index === start && !remembered ? 7000 : 25000));
       network.silent(EXTRACTORS[index] + path + query, function (data) {
         activeExtractor = index;
         Lampa.Storage.set('kino_extractor', String(index));
@@ -143,6 +145,16 @@
   }
 
   function bestOf(streams) {
+    /* Aprel отдаёт нестандартные качества (530p, 270p), поэтому выбираем
+       максимальное числом, а не по фиксированному списку. */
+    var best = null;
+    var bestNum = -1;
+    streams.forEach(function (entry) {
+      if (!entry.hls) return;
+      var num = parseInt(entry.quality, 10) || 0;
+      if (num > bestNum) { bestNum = num; best = entry; }
+    });
+    if (best) return best;
     var order = ['1080p', '720p', '480p', '360p'];
     for (var index = 0; index < order.length; index++) {
       var match = streams.filter(function (entry) { return entry.quality === order[index] && entry.hls; })[0];
@@ -513,6 +525,7 @@
       return { quality: name, hls: qualities[name] };
     });
     var best = bestOf(streams);
+    report('flow', 'playAprelStream: выбрано ' + (best ? best.quality : 'ничего') + ' из ' + streams.length);
     if (!best) return Lampa.Noty.show('Aprel: качества не найдены');
     var quality = qualityMap(streams);
     var entry = safeEntry({ url: best.hls, title: title, quality: quality, card: plainCard(movie) });
@@ -525,9 +538,12 @@
     Lampa.Loading.start();
     api('/aprel_stream', { url: url }, function (data) {
       Lampa.Loading.stop();
+      var names = data && data.qualities ? Object.keys(data.qualities).join(', ') : 'нет';
+      report('flow', 'aprel_stream ответ: ok=' + !!(data && data.success) + ', качества ' + names);
       if (!data || !data.success) return Lampa.Noty.show((data && data.error) || 'Aprel не отдал поток');
       playAprelStream(data, title, movie);
     }, function (message) {
+      report('flow', 'aprel_stream ошибка: ' + (message || 'без описания'));
       Lampa.Loading.stop();
       Lampa.Noty.show(message || 'Aprel не ответил');
     });
