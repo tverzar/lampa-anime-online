@@ -14,7 +14,7 @@
      флаг), а меню «Аниме / Кино» строит этот загрузчик. */
   window.lampa_online_single = true;
 
-  var VERSION = '1.2.1';
+  var VERSION = '1.2.2';
 
   var BUNDLE = [
     {

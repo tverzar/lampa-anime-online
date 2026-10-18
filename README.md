@@ -13,7 +13,7 @@
 **Одна ссылка на всё** — в Lampa → Настройки → Расширения → Добавить плагин:
 
 ```text
-https://tverzar.github.io/lampa-anime-online/online_all.js?v=1.2.1b
+https://tverzar.github.io/lampa-anime-online/online_all.js?v=1.2.2
 ```
 
 `online_all.js` — загрузчик: подтягивает `anime_online.js` и `kino_online.js` с GitHub Pages,
