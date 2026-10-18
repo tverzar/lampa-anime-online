@@ -33,7 +33,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.11.0"
+VERSION = "1.11.1"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -448,7 +448,7 @@ class AprelSession:
         seasons = self._seasons(embed)
         if seasons and not season:
             """Сериал без указания серии: отдаём список сезонов и серий."""
-            return {"success": True, "serial": True, "seasons": seasons}
+            return {"success": True, "serial": True, "seasons": seasons, "embed": embed_url}
 
         if seasons and season:
             chosen = None
@@ -497,7 +497,7 @@ class AprelSession:
             qualities.setdefault("%sp" % resolution.group(2), urllib.parse.urljoin(master, uri))
         if not qualities:
             qualities["auto"] = master
-        result = {"success": True, "qualities": qualities, "master": master}
+        result = {"success": True, "qualities": qualities, "master": master, "embed": embed_url}
         if chosen:
             result["season"] = str(season)
             result["episode"] = str(episode)

@@ -4,7 +4,7 @@
   if (window.kino_online_plugin) return;
   window.kino_online_plugin = true;
 
-  var VERSION = '2.3.0';
+  var VERSION = '2.4.0';
 
   /* -------------------------------------------------------------------- */
   /* Источник 1 — HDrezka через свой серверный экстрактор.                 */
@@ -541,6 +541,12 @@
       var names = data && data.qualities ? Object.keys(data.qualities).join(', ') : 'нет';
       report('flow', 'aprel_stream ответ: ok=' + !!(data && data.success) + ', качества ' + names);
       if (!data || !data.success) return Lampa.Noty.show((data && data.error) || 'Aprel не отдал поток');
+      /* Aprel закрыл сегменты CDN от внешних плееров (410) — играем их собственным
+         плеером: он открыт для встраивания и сам решает доступ к видео. */
+      if (data.embed) {
+        openAprelEmbed(data.embed, title);
+        return;
+      }
       if (data.serial && data.seasons && data.seasons.length) {
         chooseSeason(url, title, movie, data.seasons);
         return;
@@ -551,6 +557,23 @@
       Lampa.Loading.stop();
       Lampa.Noty.show(message || 'Aprel не ответил');
     });
+  }
+
+  function openAprelEmbed(url, title) {
+    report('flow', 'открываю встроенный плеер Aprel');
+    var layer = $('<div style="position:fixed;left:0;top:0;right:0;bottom:0;background:#000;z-index:9999;">' +
+      '<iframe src="' + url + '" style="position:absolute;left:0;top:0;width:100%;height:100%;border:0;" ' +
+      'allow="autoplay; fullscreen; encrypted-media" allowfullscreen></iframe>' +
+      '<div class="aprel-close selector" style="position:absolute;right:16px;top:12px;z-index:2;' +
+      'background:rgba(255,255,255,.14);color:#fff;padding:8px 18px;border-radius:22px;font-size:15px;' +
+      'font-family:inherit;cursor:pointer;">Закрыть</div></div>');
+    function shutdown() {
+      layer.remove();
+      report('flow', 'встроенный плеер закрыт');
+      try { Lampa.Controller.toggle('content'); } catch (error) { /* контент уже активен */ }
+    }
+    layer.find('.aprel-close').on('hover:enter click touchend', shutdown);
+    $('body').append(layer);
   }
 
   function chooseSeason(url, title, movie, seasons) {
