@@ -20,9 +20,11 @@ from datetime import datetime
 import gzip
 import hashlib
 import http.cookiejar
+import ipaddress
 import json
 import os
 import re
+import socket
 import sys
 import threading
 import time
@@ -31,7 +33,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.6.2"
+VERSION = "1.7.0"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -498,6 +500,86 @@ def fetch_url(url, timeout=60):
     return urllib.request.urlopen(request, timeout=timeout)
 
 
+# --- что разрешено тянуть видео-прокси -----------------------------------
+# Токен в плагине публичен (плагин раздаётся с GitHub), поэтому /hls?url= и
+# /segment.ts?url= нельзя держать открытым фетчером: иначе через сервис
+# качают что угодно за наш счёт и стучатся во внутренние адреса (сам сервис,
+# localhost, метаданные хостера). Разрешаем только те хосты, которые сервис
+# сам выдал зрителю в ответе (/kodik_url, /stream, /kodik) или которые
+# встретились в уже полученном плейлисте, плюс базовый список CDN — он нужен,
+# если телевизор дёрнет старый плейлист сразу после перезапуска службы.
+PROXY_HOSTS = ["solodcdn.com", "voidboost.one", "kodik.info", "kodik.biz", "kodik.cc",
+               "kodik.club", "kodikplayer.com", "ani-media.online", "yummyanime.tv"]
+ISSUED_HOSTS = {}
+ISSUED_LIMIT = 400
+ISSUED_TTL = 6 * 3600
+
+
+def remember_url(url):
+    """Запомнить хост, который сервис сам предложил зрителю."""
+    try:
+        host = (urllib.parse.urlparse(url).hostname or "").lower().rstrip(".")
+    except ValueError:
+        return
+    if not host:
+        return
+    ISSUED_HOSTS[host] = time.time()
+    if len(ISSUED_HOSTS) > ISSUED_LIMIT:
+        for name, _moment in sorted(ISSUED_HOSTS.items(), key=lambda item: item[1])[:50]:
+            ISSUED_HOSTS.pop(name, None)
+
+
+def remember_payload(payload):
+    """Запомнить все адреса из ответа сервиса."""
+    for match in re.finditer(r"https?://[^\s\"'<>\\]+", json.dumps(payload, ensure_ascii=False)):
+        remember_url(match.group(0))
+
+
+def host_issued(host):
+    host = (host or "").lower().rstrip(".")
+    if not host:
+        return False
+    for base in PROXY_HOSTS:
+        if host == base or host.endswith("." + base):
+            return True
+    moment = ISSUED_HOSTS.get(host)
+    return bool(moment) and time.time() - moment < ISSUED_TTL
+
+
+def host_is_internal(host):
+    """Ведёт ли имя во внутреннюю сеть (SSRF)."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except Exception:  # noqa: BLE001 — не разрешилось: считаем небезопасным
+        return True
+    for info in infos:
+        try:
+            ip = ipaddress.ip_address(info[4][0])
+        except ValueError:
+            return True
+        if (ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+                or ip.is_multicast or ip.is_unspecified):
+            return True
+    return False
+
+
+def proxy_target_allowed(url):
+    """(можно ли, причина отказа)."""
+    try:
+        parsed = urllib.parse.urlparse(url)
+    except ValueError:
+        return False, "битый адрес"
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return False, "нужен http(s)-адрес"
+    host = parsed.hostname.lower()
+    if not host_issued(host):
+        return False, "хост %s сервис не выдавал" % host
+    if host_is_internal(host):
+        return False, "хост %s ведёт во внутреннюю сеть" % host
+    return True, ""
+
+
+
 SEGMENT_CACHE = {}      # ссылка сегмента -> (байты, тип, момент)
 SEGMENT_ORDER = {}      # папка на CDN -> порядок сегментов из плейлиста
 CACHE_LOCK = threading.Lock()
@@ -631,6 +713,7 @@ def proxy_manifest(base, url):
             continue
         absolute = urllib.parse.urljoin(final, stripped)
         absolute_list.append(absolute)
+        remember_url(absolute)
         lines.append(proxy_link(base, absolute))
     remember_order(absolute_list)
     return "\n".join(lines).encode(), content_type
@@ -675,13 +758,24 @@ class Handler(BaseHTTPRequestHandler):
         return "%s://%s%s" % (scheme, host, prefix)
 
     def _client_ip(self):
+        # заголовки приходят от клиента, поэтому берём только то, что похоже
+        # на IP: иначе через подставной заголовок можно испортить журнал и
+        # выпросить ссылку, привязанную к чужому адресу
         for header in ("X-Kino-Client-IP", "X-Real-IP", "X-Client-IP", "CF-Connecting-IP"):
-            value = self.headers.get(header)
-            if value:
-                return value.strip()
+            value = (self.headers.get(header) or "").strip()
+            if not value:
+                continue
+            try:
+                return str(ipaddress.ip_address(value))
+            except ValueError:
+                continue
         forwarded = self.headers.get("X-Forwarded-For")
         if forwarded:
-            return forwarded.split(",")[0].strip()
+            candidate = forwarded.split(",")[0].strip()
+            try:
+                return str(ipaddress.ip_address(candidate))
+            except ValueError:
+                pass
         return self.client_address[0]
 
     def do_OPTIONS(self):
@@ -760,6 +854,7 @@ class Handler(BaseHTTPRequestHandler):
                            "subtitles": [{"language": match.group(1), "url": match.group(2)}
                                          for match in re.finditer(r"\[([^\]]+)\](https?://\S+)",
                                                                   str(response.get("subtitle") or ""))]}
+                remember_payload(payload)
                 self._send(payload, 200 if payload["success"] else 502)
             elif action == "kodik":
                 url = self._param(params, "url", "")
@@ -768,11 +863,14 @@ class Handler(BaseHTTPRequestHandler):
                 episode = self._param(params, "episode")
                 form = self._param(params, "form", "")
                 try:
-                    self._send(KODIK_SESSION.catalog(url=url if url.startswith("http") else None,
-                                                     media_id=media_id, media_hash=media_hash,
-                                                     form=form or "", episode=episode))
+                    data = KODIK_SESSION.catalog(url=url if url.startswith("http") else None,
+                                                 media_id=media_id, media_hash=media_hash,
+                                                 form=form or "", episode=episode)
                 except ValueError as error:
                     self._send({"error": str(error)}, 400)
+                    return
+                remember_payload(data)
+                self._send(data)
             elif action == "kodik_url":
                 """Ссылка плеера Kodik с сайта (в т.ч. /season/… от YummyAnime) → потоки серии."""
                 url = self._param(params, "url", "")
@@ -786,6 +884,7 @@ class Handler(BaseHTTPRequestHandler):
                     self._send({"error": str(error)}, 400)
                     return
                 result["success"] = bool(result.get("streams"))
+                remember_payload(result)
                 self._send(result, 200 if result.get("streams") else 502)
             elif action == "log":
                 """Отчёт из плагина: что делает телевизор и где спотыкается."""
@@ -799,6 +898,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not url.startswith("http"):
                     self._send({"error": "нужен параметр url — ссылка на плейлист m3u8"}, 400)
                     return
+                allowed, why = proxy_target_allowed(url)
+                if not allowed:
+                    log("видео-прокси отказал: %s (%s)", url[:120], why)
+                    self._send({"error": why}, 403)
+                    return
                 base = self._proxy_base(params)
                 body, _upstream = proxy_manifest(base, url)
                 # тип именно плейлиста: Safari/AVPlayer на Apple TV иначе
@@ -809,6 +913,11 @@ class Handler(BaseHTTPRequestHandler):
                 url = self._param(params, "url", "")
                 if not url.startswith("http"):
                     self._send({"error": "нужен параметр url — ссылка на сегмент"}, 400)
+                    return
+                allowed, why = proxy_target_allowed(url)
+                if not allowed:
+                    log("видео-прокси отказал: %s (%s)", url[:120], why)
+                    self._send({"error": why}, 403)
                     return
                 cached = cache_get(url)
                 if cached:
@@ -871,6 +980,13 @@ def main():
         with open(arguments.config, encoding="utf-8") as handle:
             CONFIG = json.load(handle)
     TOKEN = CONFIG.get("token") or os.environ.get("KINO_TOKEN") or "kino"
+    extra_hosts = CONFIG.get("proxy_hosts") or []
+    if isinstance(extra_hosts, str):
+        extra_hosts = [extra_hosts]
+    for extra in extra_hosts:
+        extra = str(extra).strip().lower()
+        if extra and extra not in PROXY_HOSTS:
+            PROXY_HOSTS.append(extra)
     port = arguments.port or int(CONFIG.get("port") or 8791)
     log("kino-extractor %s запущен на %s:%d", VERSION, arguments.host, port)
     threading.Thread(target=SESSION.solve, daemon=True).start()
