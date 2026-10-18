@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.23.1';
+  var VERSION = '1.23.2';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -1040,6 +1040,8 @@
   /* -------------------------------------------------------------------- */
 
   function addButton(event) {
+    /* при установке одной ссылкой кнопку рисует загрузчик online_all.js */
+    if (window.lampa_online_single) return;
     if (!event || event.type !== 'complite' || !event.object || !event.data || !event.data.movie) return;
     var root = event.object.activity.render();
     if (root.find('.view--anime-online').length) return;
@@ -1091,7 +1093,7 @@
 
       api.addParam({
         component: 'anime_online',
-        param: { name: 'anime_online_yummy_token', type: 'input', default: '' },
+        param: { name: 'anime_online_yummy_token', type: 'input', values: '', default: '' },
         field: {
           name: 'Токен YummyAnime (не нужен)',
           description: 'Вписывать нечего: api.yani.tv отвечает без токена. Поле на случай, если сайт начнёт его требовать.'

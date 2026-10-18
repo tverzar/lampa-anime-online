@@ -4,7 +4,7 @@
   if (window.kino_online_plugin) return;
   window.kino_online_plugin = true;
 
-  var VERSION = '2.2.1';
+  var VERSION = '2.2.2';
 
   /* -------------------------------------------------------------------- */
   /* Источник 1 — HDrezka через свой серверный экстрактор.                 */
@@ -571,6 +571,8 @@
   /* -------------------------------------------------------------------- */
 
   function addButton(event) {
+    /* при установке одной ссылкой кнопку рисует загрузчик online_all.js */
+    if (window.lampa_online_single) return;
     if (!event || event.type !== 'complite' || !event.object || !event.data || !event.data.movie) return;
     var root = event.object.activity.render();
     if (root.find('.view--kino-online').length) return;
@@ -688,7 +690,7 @@
       });
       api.addParam({
         component: 'kino_online',
-        param: { name: 'rezka_login', type: 'input', default: '' },
+        param: { name: 'rezka_login', type: 'input', values: '', default: '' },
         field: {
           name: 'Логин HDrezka',
           description: 'Гость получает 360p/480p. С аккаунтом качества выше. Логин и пароль хранятся в настройках Lampa и уходят на ваш сервер.'
@@ -697,7 +699,7 @@
       });
       api.addParam({
         component: 'kino_online',
-        param: { name: 'rezka_password', type: 'input', default: '' },
+        param: { name: 'rezka_password', type: 'input', values: '', default: '' },
         field: {
           name: 'Пароль HDrezka',
           description: 'Отправляется на сервер в теле запроса (не в адресе), поэтому в журналах не остаётся. В настройках Lampa виден открытым текстом.'
@@ -706,7 +708,7 @@
       });
       api.addParam({
         component: 'kino_online',
-        param: { name: 'aprel_login', type: 'input', default: '' },
+        param: { name: 'aprel_login', type: 'input', values: '', default: '' },
         field: {
           name: 'Логин Aprel Kino',
           description: 'Второй источник: aprelteam.gokino.by. Гостям фильмы закрыты, поэтому нужен аккаунт. Даёт 720p прямым потоком без ограничений Rezka.'
@@ -715,7 +717,7 @@
       });
       api.addParam({
         component: 'kino_online',
-        param: { name: 'aprel_password', type: 'input', default: '' },
+        param: { name: 'aprel_password', type: 'input', values: '', default: '' },
         field: {
           name: 'Пароль Aprel Kino',
           description: 'Хранится в настройках Lampa и уходит на ваш сервер в теле запроса. После ввода появится выбор источника при запуске фильма.'
