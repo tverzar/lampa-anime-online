@@ -33,7 +33,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.7.0"
+VERSION = "1.8.0"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -62,6 +62,10 @@ class RezkaSession:
         self.opener = urllib.request.build_opener(urllib.request.HTTPCookieProcessor(self.jar))
         self.ready = False
         self.solves = 0
+        # вход в аккаунт: гость получает 360p/480p, аккаунт — выше
+        self.credentials = None
+        self.authorized = False
+        self.login_tried = False
 
     def raw(self, url, data=None, headers=None, referer=None, timeout=45):
         body = urllib.parse.urlencode(data).encode() if isinstance(data, dict) else data
@@ -110,10 +114,43 @@ class RezkaSession:
             self.solves += 1
             log("Anubis пройден: сложность %s, nonce %s, %.2f c", difficulty, nonce, time.time() - started)
 
+    def login(self, name, password):
+        """Вход в аккаунт HDrezka. Без него сайт отдаёт только гостевые качества."""
+        with self.lock:
+            if not self.ready:
+                self.solve()
+            self.login_tried = True
+            status, body = self.raw(
+                self.base + "/ajax/login/",
+                {"login_name": name, "login_password": password, "login_not_save": "0"},
+                {"X-Requested-With": "XMLHttpRequest",
+                 "Accept": "application/json, text/javascript, */*; q=0.01"},
+                referer=self.base + "/")
+            if "anubis_challenge" in body:
+                self.solve()
+                status, body = self.raw(
+                    self.base + "/ajax/login/",
+                    {"login_name": name, "login_password": password, "login_not_save": "0"},
+                    {"X-Requested-With": "XMLHttpRequest",
+                     "Accept": "application/json, text/javascript, */*; q=0.01"},
+                    referer=self.base + "/")
+            try:
+                answer = json.loads(body)
+            except Exception:
+                answer = {"success": False, "message": "некорректный ответ сайта"}
+            self.authorized = bool(answer.get("success"))
+            if self.authorized:
+                log("вход в HDrezka выполнен, качества будут по тарифу аккаунта")
+            else:
+                log("вход в HDrezka не удался: %s", str(answer.get("message"))[:140])
+            return self.authorized
+
     def request(self, url, data=None, headers=None, referer=None):
         with self.lock:
             if not self.ready:
                 self.solve()
+            if self.credentials and not self.authorized and not self.login_tried:
+                self.login(*self.credentials)
             status, body = self.raw(url, data, headers, referer)
             if "anubis_challenge" in body:
                 log("челлендж вернулся — перепроходим")
@@ -810,7 +847,8 @@ class Handler(BaseHTTPRequestHandler):
         try:
             if action == "health":
                 self._send({"ok": True, "version": VERSION, "rezka_ready": SESSION.ready,
-                            "anubis_solves": SESSION.solves, "client_ip": geo_ip})
+                            "anubis_solves": SESSION.solves, "rezka_user": SESSION.authorized,
+                            "client_ip": geo_ip})
             elif action == "search":
                 query = (self._param(params, "q", "") or "").strip()
                 if not query:
@@ -987,6 +1025,11 @@ def main():
         extra = str(extra).strip().lower()
         if extra and extra not in PROXY_HOSTS:
             PROXY_HOSTS.append(extra)
+    login_name = str(CONFIG.get("rezka_login") or "").strip()
+    login_password = str(CONFIG.get("rezka_password") or "")
+    if login_name and login_password:
+        SESSION.credentials = (login_name, login_password)
+        log("настроен вход в HDrezka: %s", login_name)
     port = arguments.port or int(CONFIG.get("port") or 8791)
     log("kino-extractor %s запущен на %s:%d", VERSION, arguments.host, port)
     threading.Thread(target=SESSION.solve, daemon=True).start()
