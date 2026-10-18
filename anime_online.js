@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.22.0';
+  var VERSION = '1.23.0';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -237,13 +237,35 @@
     });
   }
 
+  /* Страховка от «вечной загрузки»: сетевые вызовы Lampa не всегда сообщают об
+     ошибке — на tvOS запрос может молча провисеть, а кружок останется навсегда.
+     Через 20 секунд снимаем его сами и пишем в журнал, где именно застряли. */
+  var loadingTimer = null;
+
+  function loadingStart(where) {
+    try { Lampa.Loading.start(); } catch (error) { /* нет загрузчика */ }
+    if (loadingTimer) clearTimeout(loadingTimer);
+    loadingTimer = setTimeout(function () {
+      loadingTimer = null;
+      try { Lampa.Loading.stop(); } catch (error) { /* нет загрузчика */ }
+      report('fail', 'таймаут загрузки: ' + where);
+      try { Lampa.Noty.show('Не дождались ответа — попробуйте ещё раз'); } catch (error) { /* нет уведомлений */ }
+    }, 20000);
+  }
+
+  function loadingStop() {
+    if (loadingTimer) { clearTimeout(loadingTimer); loadingTimer = null; }
+    try { Lampa.Loading.stop(); } catch (error) { /* нет загрузчика */ }
+  }
+
   function openAniLibria(movie) {
-    Lampa.Loading.start();
+    loadingStart('openAniLibria');
     findReleases(movie, function (items) {
-      Lampa.Loading.stop();
+      loadingStop();
       chooseRelease(items, movie);
     }, function () {
-      Lampa.Loading.stop();
+      loadingStop();
+      report('fail', 'AniLibria: релиз не найден по названию');
       Lampa.Noty.show('Аниме не найдено в AniLibria');
     });
   }
@@ -276,9 +298,9 @@
   function openYummyTv(movie) {
     var query = queryFor(movie);
     if (!query) return Lampa.Noty.show('Не удалось определить название');
-    Lampa.Loading.start();
+    loadingStart('openYummyTv');
     requestText(YUMMY_TV + '/index.php?do=search&subaction=search&story=' + encodeURIComponent(query), function (html) {
-      Lampa.Loading.stop();
+      loadingStop();
       var found = [];
       var seen = {};
       var re = /<a class="movie-item__link" href="([^"]+)">[\s\S]*?<div class="movie-item__label [^"]+">([\s\S]*?)<\/div>[\s\S]*?<div class="movie-item__title" title="([^"]+)">/gi;
@@ -289,39 +311,47 @@
         seen[url] = true;
         found.push({ url: url, title: htmlValue(match[3]), subtitle: htmlValue(match[2]) });
       }
-      if (!found.length) return Lampa.Noty.show('Аниме не найдено на YummyAnime.TV');
+      if (!found.length) report('fail', 'YummyAnime.TV: релиз не найден');
+      return Lampa.Noty.show('Аниме не найдено на YummyAnime.TV');
       Lampa.Select.show({
         title: 'YummyAnime.TV: выберите релиз', items: found,
         onBack: function () { Lampa.Controller.toggle('content'); },
         onSelect: function (choice) { openYummyTvRelease(choice, movie); }
       });
     }, function () {
-      Lampa.Loading.stop();
+      loadingStop();
+      report('fail', 'YummyAnime.TV: поиск не ответил');
       Lampa.Noty.show('Не удалось выполнить поиск на YummyAnime.TV');
     });
   }
 
   function openYummyTvRelease(choice, movie) {
-    Lampa.Loading.start();
+    loadingStart('openYummyTvRelease');
     requestText(choice.url, function (html) {
       var params = String(html || '').match(/class="xfplayer"[^>]+data-params="([^"]*mod=kodik-player[^"]*)"/i);
       if (!params) {
-        Lampa.Loading.stop();
+        loadingStop();
+        report('fail', 'YummyAnime.TV: у релиза нет плеера Kodik');
         return Lampa.Noty.show('У релиза нет совместимого плеера Kodik');
       }
       var query = htmlValue(params[1]);
       requestText(YUMMY_TV + '/engine/ajax/controller.php?' + query, function (answer) {
-        Lampa.Loading.stop();
+        loadingStop();
         var json;
         try { json = typeof answer === 'string' ? JSON.parse(answer) : answer; } catch (e) {}
-        if (!json || !json.success || !json.data) return Lampa.Noty.show('YummyAnime.TV не вернул ссылку плеера');
+        if (!json || !json.success || !json.data) {
+          report('fail', 'YummyAnime.TV: AJAX не вернул ссылку Kodik');
+          return Lampa.Noty.show('YummyAnime.TV не вернул ссылку плеера');
+        }
         openKodik(String(json.data).replace(/\\\//g, '/'), choice, movie);
       }, function () {
-        Lampa.Loading.stop();
+        loadingStop();
+        report('fail', 'YummyAnime.TV: AJAX плеера не ответил');
         Lampa.Noty.show('Не удалось получить плеер YummyAnime.TV');
       }, { Referer: choice.url, Accept: 'application/json' });
     }, function () {
-      Lampa.Loading.stop();
+      loadingStop();
+      report('fail', 'YummyAnime.TV: страница релиза не открылась');
       Lampa.Noty.show('Не удалось открыть релиз YummyAnime.TV');
     });
   }
@@ -333,12 +363,12 @@
 
   function openKodik(link, choice, movie) {
     var releaseTitle = 'YummyAnime.TV · ' + choice.title;
-    Lampa.Loading.start();
+    loadingStart('openKodik');
     extractorApi('kodik', { url: link }, function (catalog) {
-      Lampa.Loading.stop();
+      loadingStop();
       showKodikTranslations(link, releaseTitle, movie, catalog);
     }, function () {
-      Lampa.Loading.stop();
+      loadingStop();
       showFrame(link, releaseTitle, backToContent);
     });
   }
@@ -364,12 +394,12 @@
   }
 
   function showKodikEpisodes(link, releaseTitle, movie, catalog, translation) {
-    Lampa.Loading.start();
+    loadingStart('showKodikEpisodes');
     /* form подсказываем сервису: у ссылок YummyAnime идентификаторы «сезонные»,
        и запрос по умолчанию (/serial/) на них отвечает 500. */
     extractorApi('kodik', { media_id: translation.media_id, media_hash: translation.media_hash,
                             form: (catalog && catalog.form) || '' }, function (data) {
-      Lampa.Loading.stop();
+      loadingStop();
       var episodes = (data && data.episodes) || [];
       if (!episodes.length) return showFrame(link, releaseTitle, backToContent);
       var items = episodes.map(function (episode) {
@@ -386,7 +416,7 @@
         }
       });
     }, function () {
-      Lampa.Loading.stop();
+      loadingStop();
       showFrame(link, releaseTitle, backToContent);
     });
   }
@@ -399,8 +429,23 @@
     return quality;
   }
 
+  function paramValue(name, fallback) {
+    /* настройки Lampa хранит по-разному: сначала спрашиваем Params (там живут
+       параметры из SettingsApi), потом Storage — на случай старых сборок */
+    try {
+      if (Lampa.Params && typeof Lampa.Params.get === 'function') {
+        var value = Lampa.Params.get(name);
+        if (value !== undefined && value !== null && value !== '') return value;
+      }
+    } catch (error) { /* сборка без Params.get */ }
+    try {
+      var stored = Lampa.Storage.get(name, fallback);
+      return (stored === undefined || stored === null || stored === '') ? fallback : stored;
+    } catch (error) { return fallback; }
+  }
+
   function qualitySetting() {
-    try { return String(Lampa.Storage.get('anime_quality', 'auto') || 'auto'); } catch (error) { return 'auto'; }
+    return String(paramValue('anime_quality', 'auto') || 'auto');
   }
 
   /* Плеер Lampa сам подменяет ссылку на качество из своей настройки «Качество
@@ -639,15 +684,15 @@
   }
 
   function playKodik(link, releaseTitle, movie, catalog, translation, episode) {
-    Lampa.Loading.start();
+    loadingStart('playKodik');
     extractorApi('kodik_stream', { id: episode.id, hash: episode.hash }, function (data) {
-      Lampa.Loading.stop();
+      loadingStop();
       if (!playStreams(movie, releaseTitle, episode.number, (data && data.streams) || [])) {
         Lampa.Noty.show('Kodik не отдал поток для этой серии');
         report('fail', 'Kodik не отдал поток: ' + link);
       }
     }, function () {
-      Lampa.Loading.stop();
+      loadingStop();
       Lampa.Noty.show('Не удалось получить поток Kodik');
       report('fail', 'не получил поток Kodik: ' + link);
     });
@@ -658,7 +703,7 @@
   /* -------------------------------------------------------------------- */
 
   function yummyToken() {
-    return String(Lampa.Storage.get('anime_online_yummy_token', '') || '').trim();
+    return String(paramValue('anime_online_yummy_token', '') || '').trim();
   }
 
   /* Токен приложения сейчас не обязателен: api.yani.tv отвечает и без него.
@@ -676,9 +721,9 @@
   function openYummy(movie) {
     var query = queryFor(movie);
     if (!query) return Lampa.Noty.show('Не удалось определить название');
-    Lampa.Loading.start();
+    loadingStart('openYummy');
     requestYummy('/anime?q=' + encodeURIComponent(query) + '&limit=30&offset=0', function (json) {
-      Lampa.Loading.stop();
+      loadingStop();
       var items = json && Array.isArray(json.response) ? json.response : [];
       if (!items.length) return Lampa.Noty.show('Аниме не найдено в YummyAnime');
       items = items.slice().sort(function (a, b) {
@@ -699,7 +744,7 @@
         onSelect: function (choice) { openYummyRelease(choice.anime, movie); }
       });
     }, function () {
-      Lampa.Loading.stop();
+      loadingStop();
       Lampa.Noty.show('API YummyAnime не ответил — возможно, нужен токен в настройках «Аниме онлайн»');
     });
   }
@@ -729,16 +774,16 @@
     };
     if (probe.indexOf('kodik') === -1) return fallback();
 
-    Lampa.Loading.start();
+    loadingStart('playYummyVideo');
     extractorApi('kodik_url', { url: link, episode: number }, function (data) {
-      Lampa.Loading.stop();
+      loadingStop();
       if (!playStreams(movie, releaseTitle, number, (data && data.streams) || [])) {
         Lampa.Noty.show('Kodik не отдал поток — открываю окном');
         report('fail', 'старый YummyAnime: Kodik не отдал поток — уходим окном');
         fallback();
       }
     }, function () {
-      Lampa.Loading.stop();
+      loadingStop();
       Lampa.Noty.show('Сервис потоков не ответил — открываю окном');
         report('fail', 'сервис потоков не ответил — уходим окном');
       fallback();
@@ -746,9 +791,9 @@
   }
 
   function openYummyRelease(anime, movie) {
-    Lampa.Loading.start();
+    loadingStart('openYummyRelease');
     requestYummy('/anime/' + encodeURIComponent(anime.anime_url || anime.anime_id) + '?need_videos=true', function (json) {
-      Lampa.Loading.stop();
+      loadingStop();
       var detail = json && json.response || {};
       var videos = Array.isArray(detail.videos) ? detail.videos : [];
       videos = videos.filter(function (video) {
@@ -810,7 +855,8 @@
 
       showVoices();
     }, function () {
-      Lampa.Loading.stop();
+      loadingStop();
+      report('fail', 'YummyAnime: серии не пришли');
       Lampa.Noty.show('Не удалось получить серии YummyAnime');
     });
   }
@@ -829,6 +875,7 @@
       ],
       onBack: function () { Lampa.Controller.toggle('content'); },
       onSelect: function (item) {
+        report('open', 'источник: ' + item.source);
         if (item.source === 'yummytv') openYummyTv(movie);
         else if (item.source === 'yummy') openYummy(movie);
         else openAniLibria(movie);
@@ -930,10 +977,10 @@
     }
 
     function load() {
-      Lampa.Loading.start();
+      loadingStart('load');
       network.timeout(15000);
       network.silent(API + '/anime/releases/' + encodeURIComponent(object.release_id), function (data) {
-        Lampa.Loading.stop();
+        loadingStop();
         release = data || {};
         var episodes = Array.isArray(release.episodes) ? release.episodes.slice() : [];
         episodes.sort(function (a, b) { return Number(a.ordinal) - Number(b.ordinal); });
@@ -942,7 +989,7 @@
         else episodes.forEach(function (episode) { appendEpisode(episode, playlist); });
         self.start(true);
       }, function () {
-        Lampa.Loading.stop();
+        loadingStop();
         showEmpty('Не удалось получить серии AniLibria');
         self.start(true);
       });
@@ -1008,37 +1055,59 @@
     else root.find('.full-start-new__buttons, .full-start__buttons').first().append(button);
   }
 
+  /* Раздел «Аниме онлайн» в настройках Lampa. Раньше папка вставлялась в
+     разметку вручную (div.settings-folder без обработчика нажатия): её было
+     видно в списке, но она не открывалась, поэтому настроек в плагине не
+     существовало — качество менялось только в настройках самой Lampa. */
   function addSettings() {
+    var api = window.Lampa && Lampa.SettingsApi;
+
+    if (api && typeof api.addComponent === 'function' && typeof api.addParam === 'function') {
+      api.addComponent({
+        component: 'anime_online',
+        name: 'Аниме онлайн',
+        icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg>'
+      });
+
+      api.addParam({
+        component: 'anime_online',
+        param: {
+          name: 'anime_quality',
+          type: 'select',
+          values: {
+            'auto': 'Авто — до 720p',
+            '720p': '720p — максимальное',
+            '480p': '480p — меньше подгрузок',
+            '360p': '360p — самый лёгкий'
+          },
+          default: 'auto'
+        },
+        field: {
+          name: 'Качество потока',
+          description: 'С каким качеством запускать серию. Если видео подтормаживает — 480p или 360p: поток станет в 2–3 раза легче.'
+        }
+      });
+
+      api.addParam({
+        component: 'anime_online',
+        param: { name: 'anime_online_yummy_token', type: 'input', default: '' },
+        field: {
+          name: 'Токен YummyAnime (не нужен)',
+          description: 'Вписывать нечего: api.yani.tv отвечает без токена. Поле на случай, если сайт начнёт его требовать.'
+        }
+      });
+      return;
+    }
+
+    /* Сборки без SettingsApi: регистрируем хотя бы значения, чтобы чтение
+       настройки не падало на дефолт. */
     Lampa.Params.select('anime_online_yummy_token', '', '');
-    /* Качество по умолчанию: если канал до сервера узкий, 480p играет ровно. */
     Lampa.Params.select('anime_quality', 'auto', {
       'auto': 'Авто — до 720p',
       '720p': '720p — максимальное',
       '480p': '480p — меньше подгрузок',
       '360p': '360p — самый лёгкий'
     });
-    Lampa.Template.add('settings_anime_online', '<div>' +
-      '<div class="settings-param selector" data-name="anime_quality" data-type="select">' +
-        '<div class="settings-param__name">Качество потока</div>' +
-        '<div class="settings-param__value"></div>' +
-        '<div class="settings-param__descr">Если видео подтормаживает (буферизация), выберите 480p или 360p — поток станет в 2–3 раза легче. 720p тяжелее, но картинка резче.</div>' +
-      '</div>' +
-      '<div class="settings-param selector" data-name="anime_online_yummy_token" data-type="input" data-string="true" placeholder="X-Application token">' +
-        '<div class="settings-param__name">Токен приложения YummyAnime (не нужен)</div>' +
-        '<div class="settings-param__value"></div>' +
-        '<div class="settings-param__descr">Вписывать нечего: api.yani.tv отвечает без токена. Раздел с токенами есть только у старого сайта yummyani.me (yummyani.me/dev/applications), у нового yummyanime.tv его нет. Поле оставлено про запас: если YummyAnime начнёт требовать токен, он уйдёт заголовком X-Application только на api.yani.tv.</div>' +
-      '</div></div>');
-
-    function insertFolder() {
-      if (!Lampa.Settings.main || !Lampa.Settings.main() || Lampa.Settings.main().render().find('[data-component="anime_online"]').length) return;
-      var folder = $('<div class="settings-folder selector" data-component="anime_online">' +
-        '<div class="settings-folder__icon"><svg viewBox="0 0 24 24"><path fill="currentColor" d="M8 5v14l11-7z"/></svg></div>' +
-        '<div class="settings-folder__name">Аниме онлайн</div></div>');
-      Lampa.Settings.main().render().find('[data-component="more"]').after(folder);
-      Lampa.Settings.main().update();
-    }
-    if (window.appready) insertFolder();
-    else Lampa.Listener.follow('app', function (event) { if (event.type === 'ready') insertFolder(); });
   }
 
   Lampa.Component.add(COMPONENT, AnimeComponent);
@@ -1057,7 +1126,7 @@
   };
 
   /* Сразу сообщаем на сервер, кто и с чем запустился. */
-  report('load', deviceLine());
+  report('load', deviceLine() + ' | качество ' + qualitySetting());
 
   /* Ошибки плагина и плеера тоже уходят в журнал на сервере. */
   try {
