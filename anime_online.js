@@ -4,7 +4,7 @@
   if (window.anime_online_plugin) return;
   window.anime_online_plugin = true;
 
-  var VERSION = '1.24.0';
+  var VERSION = '1.24.1';
   var API = 'https://anilibria.top/api/v1';
   var YUMMY_API = 'https://api.yani.tv';
   var YUMMY_TV = 'https://yummyanime.tv';
@@ -549,7 +549,7 @@
      сразу закрывается. Поэтому по умолчанию гоняем видео через наш сервер
      (ручки playlist.m3u8 / segment.ts). Если у вас CDN открывается —
      поставьте false, тогда плеер будет тянуть поток напрямую. */
-  var VIDEO_VIA_SERVER = true;
+  var VIDEO_VIA_SERVER = false;
   var proxyNoticeShown = false;
 
   function proxiedStream(url) {
