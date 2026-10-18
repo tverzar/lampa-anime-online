@@ -22,7 +22,7 @@
       loaded: function () { return !!window.anime_online_plugin; },
       urls: [
         'https://tverzar.github.io/lampa-anime-online/anime_online.js',
-        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@3e62989/anime_online.js'
+        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@173325c/anime_online.js'
       ]
     },
     {
@@ -30,7 +30,7 @@
       loaded: function () { return !!window.kino_online_plugin; },
       urls: [
         'https://tverzar.github.io/lampa-anime-online/kino_online.js',
-        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@3e62989/kino_online.js'
+        'https://cdn.jsdelivr.net/gh/tverzar/lampa-anime-online@173325c/kino_online.js'
       ]
     }
   ];
