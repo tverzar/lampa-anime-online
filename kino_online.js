@@ -4,7 +4,7 @@
   if (window.kino_online_plugin) return;
   window.kino_online_plugin = true;
 
-  var VERSION = '2.0.1';
+  var VERSION = '2.1.0';
 
   /* -------------------------------------------------------------------- */
   /* Источник 1 — HDrezka через свой серверный экстрактор.                 */
@@ -501,6 +501,113 @@
   /* Отладочный вход: можно вызвать из консоли — window.__kino.open({title:'Интерстеллар'}) */
   window.__kino = { version: VERSION, open: openKino, api: api, extractor: EXTRACTOR };
 
+  /* -------------------------------------------------------------------- */
+  /* Вход в HDrezka из настроек плагина                                    */
+  /*                                                                       */
+  /* Гость получает 360p/480p, аккаунт — выше. Пароль уходит на наш сервис  */
+  /* в теле POST (в адресе он осел бы в журналах nginx), сервис логинится   */
+  /* и держит сессию. В Lampa логин с паролем остаются в настройках — это   */
+  /* плата за удобство: их видит любой, у кого есть доступ к телевизору.    */
+  /* -------------------------------------------------------------------- */
+
+  function paramValue(name, fallback) {
+    try {
+      if (Lampa.Params && typeof Lampa.Params.get === 'function') {
+        var value = Lampa.Params.get(name);
+        if (value !== undefined && value !== null && value !== '') return value;
+      }
+    } catch (error) { /* сборка без Params.get */ }
+    try {
+      var stored = Lampa.Storage.get(name, fallback);
+      return (stored === undefined || stored === null || stored === '') ? fallback : stored;
+    } catch (error) { return fallback; }
+  }
+
+  function notify(message) {
+    try { Lampa.Noty.show(message); } catch (error) { /* нет уведомлений */ }
+  }
+
+  function loginToRezka(done) {
+    var name = String(paramValue('rezka_login', '') || '').trim();
+    var password = String(paramValue('rezka_password', '') || '');
+    if (!name || !password) {
+      if (done) done(false);
+      return false;
+    }
+
+    var url = EXTRACTORS[0] + '/login';
+    /* text/plain — «простой» запрос: веб-вью не делает предварительный
+       OPTIONS, а сервис всё равно разбирает тело как форму */
+    var body = 'login=' + encodeURIComponent(name) + '&password=' + encodeURIComponent(password);
+    var finish = function (ok, message) {
+      if (ok) notify('HDrezka: вход выполнен, качества будут выше');
+      else notify('HDrezka: ' + (message || 'вход не удался'));
+      if (done) done(ok);
+    };
+
+    try {
+      if (window.fetch) {
+        window.fetch(url, {
+          method: 'POST',
+          headers: { 'Content-Type': 'text/plain;charset=UTF-8' },
+          body: body,
+          cache: 'no-store'
+        }).then(function (response) {
+          return response.json().catch(function () { return {}; });
+        }).then(function (data) {
+          finish(!!(data && data.ok), data && data.error);
+        }).catch(function () {
+          finish(false, 'сервис не ответил');
+        });
+        return true;
+      }
+    } catch (error) { /* уходим на Reguest */ }
+
+    try {
+      var network = new Lampa.Reguest();
+      network.timeout(15000);
+      network.silent(url, function (data) { finish(!!(data && data.ok), data && data.error); },
+        function () { finish(false, 'сервис не ответил'); }, true,
+        { headers: { 'Content-Type': 'text/plain;charset=UTF-8' }, data: body });
+      return true;
+    } catch (error) {
+      finish(false, 'не смог отправить');
+      return false;
+    }
+  }
+
+  function addSettings() {
+    var api = window.Lampa && Lampa.SettingsApi;
+    if (!api || typeof api.addComponent !== 'function' || typeof api.addParam !== 'function') return;
+    try {
+      api.addComponent({
+        component: 'kino_online',
+        name: 'Кино онлайн',
+        icon: '<svg viewBox="0 0 24 24"><path fill="currentColor" d="M4 6h16v12H4z"/></svg>'
+      });
+      api.addParam({
+        component: 'kino_online',
+        param: { name: 'rezka_login', type: 'input', default: '' },
+        field: {
+          name: 'Логин HDrezka',
+          description: 'Гость получает 360p/480p. С аккаунтом качества выше. Логин и пароль хранятся в настройках Lampa и уходят на ваш сервер.'
+        },
+        onChange: function () { loginToRezka(); }
+      });
+      api.addParam({
+        component: 'kino_online',
+        param: { name: 'rezka_password', type: 'input', default: '' },
+        field: {
+          name: 'Пароль HDrezka',
+          description: 'Отправляется на сервер в теле запроса (не в адресе), поэтому в журналах не остаётся. В настройках Lampa виден открытым текстом.'
+        },
+        onChange: function () { loginToRezka(); }
+      });
+    } catch (error) {
+      console.log('[Kino Online] настройки не создались:', error && error.message);
+    }
+  }
+
   Lampa.Manifest.plugins = {
     type: 'video',
     version: VERSION,
@@ -512,6 +619,11 @@
     },
     onContextLauch: function (movie) { openKino(movie); }
   };
+
+  addSettings();
+  /* если логин уже введён — повторяем вход при каждом запуске: сессия на
+     сервере живёт в памяти и после его перезапуска пропадает */
+  loginToRezka();
 
   console.log('[Kino Online] loaded', VERSION);
 })();

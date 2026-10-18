@@ -33,7 +33,7 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-VERSION = "1.8.0"
+VERSION = "1.9.0"
 BASE = "https://hdrezka-home.tv"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36")
@@ -511,6 +511,29 @@ SESSION = RezkaSession()
 KODIK_SESSION = KodikSession()
 TOKEN = ""
 CONFIG = {}
+CONFIG_PATH = ""
+
+
+def save_credentials(name, password):
+    """Сохранить вход в конфиг, чтобы он пережил перезапуск службы."""
+    global CONFIG
+    if not CONFIG_PATH:
+        return False
+    CONFIG["rezka_login"] = name
+    CONFIG["rezka_password"] = password
+    try:
+        temporary = CONFIG_PATH + ".tmp"
+        with open(temporary, "w", encoding="utf-8") as handle:
+            json.dump(CONFIG, handle, ensure_ascii=False, indent=2)
+        os.replace(temporary, CONFIG_PATH)
+        try:
+            os.chmod(CONFIG_PATH, 0o600)
+        except OSError:
+            pass
+        return True
+    except Exception as error:  # noqa: BLE001 — не роняем сервис из-за файла
+        log("не смог сохранить вход в конфиг: %r", error)
+        return False
 
 
 LOG_FILE = "/var/log/kino-plugin.log"
@@ -819,8 +842,54 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(204)
         self.send_header("Access-Control-Allow-Origin", "*")
         self.send_header("Access-Control-Allow-Headers", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.end_headers()
+
+    def do_POST(self):
+        """POST только для входа в аккаунт: пароль идёт в теле, а не в адресе.
+
+        В адресе он осел бы в журналах nginx и в собственном журнале сервиса,
+        а тело запроса никуда не пишется.
+        """
+        parsed = urllib.parse.urlparse(self.path)
+        parts = [part for part in parsed.path.split("/") if part]
+        if parts and parts[0] == "kino":
+            parts = parts[1:]
+        if not parts or parts[0] != TOKEN:
+            self._send({"error": "нужен токен"}, 403)
+            return
+        action = parts[1] if len(parts) > 1 else ""
+        if action != "login":
+            self._send({"error": "неизвестное действие"}, 404)
+            return
+        try:
+            length = int(self.headers.get("Content-Length") or 0)
+        except ValueError:
+            length = 0
+        if length <= 0 or length > 4096:
+            self._send({"error": "пустое или слишком большое тело"}, 400)
+            return
+        raw = self.rfile.read(length).decode("utf-8", "ignore")
+        data = {}
+        if "json" in (self.headers.get("Content-Type") or "").lower():
+            try:
+                data = json.loads(raw)
+            except Exception:
+                data = {}
+        if not isinstance(data, dict) or not data:
+            data = {key: value[0] for key, value in urllib.parse.parse_qs(raw).items()}
+        name = str(data.get("login") or "").strip()
+        password = str(data.get("password") or "")
+        if not name or not password:
+            self._send({"error": "нужны логин и пароль"}, 400)
+            return
+        authorized = SESSION.login(name, password)
+        if authorized:
+            SESSION.credentials = (name, password)
+            saved = save_credentials(name, password)
+            self._send({"ok": True, "user": True, "saved": saved})
+        else:
+            self._send({"ok": False, "error": "сайт не принял логин или пароль"}, 401)
 
     def _param(self, params, name, default=None):
         return (params.get(name) or [default])[0]
@@ -1014,6 +1083,8 @@ def main():
     parser.add_argument("--port", type=int)
     parser.add_argument("--host", default="127.0.0.1")
     arguments = parser.parse_args()
+    global CONFIG_PATH
+    CONFIG_PATH = arguments.config
     if os.path.exists(arguments.config):
         with open(arguments.config, encoding="utf-8") as handle:
             CONFIG = json.load(handle)
