@@ -3,7 +3,7 @@
 Три части в одном репозитории:
 
 - **anime_online.js** (v1.23.0) — кнопка «Аниме онлайн» на карточке (AniLibria, YummyAnime, YummyAnime.TV). У YummyAnime и YummyAnime.TV озвучка и серия выбираются в Lampa, а видео играет её собственный плеер: сервис на VPS отдаёт прямые HLS-ссылки плеера Kodik.
-- **kino_online.js** (v2.2.2) — кнопка «Кино онлайн»: фильмы и сериалы **HDrezka прямым HLS-потоком**; если сервер недоступен — запасной источник Kinokrad (плеер окном).
+- **kino_online.js** (v2.2.3) — кнопка «Кино онлайн»: фильмы и сериалы **HDrezka прямым HLS-потоком**; если сервер недоступен — запасной источник Kinokrad (плеер окном).
 - **kino_extractor.py** (v1.10.1) + **worker.js** — серверная часть: экстрактор HDrezka, разбор Kodik и видео-прокси (HLS) на VPS, CORS-прокси и мост на Cloudflare.
 - **cub_vps.js** (v1.0.0) — запросы CUB идут через наш VPS: без этого карточка фильма виснет, потому что `cub.*` из РФ недоступен.
 - **slow_check.js** (v2.0.0) — диагностика: журнал сетевых запросов (Настройки → «Журнал запросов»).
@@ -13,7 +13,7 @@
 **Одна ссылка на всё** — в Lampa → Настройки → Расширения → Добавить плагин:
 
 ```text
-https://tverzar.github.io/lampa-anime-online/online_all.js?v=1.2.1
+https://tverzar.github.io/lampa-anime-online/online_all.js?v=1.2.1b
 ```
 
 `online_all.js` — загрузчик: подтягивает `anime_online.js` и `kino_online.js` с GitHub Pages,
@@ -364,6 +364,12 @@ git config core.hooksPath .githooks
 - Источники пиратские: доступность и реклама зависят от площадок.
 
 ## История версий
+
+**кино 2.2.3**
+
+- В кино-плагин добавлено журналирование как в аниме: лог загрузки, перехват `window.onerror`/`unhandledrejection`
+  и отметки в ключевых точках (openKino → chooseAprel → aprel_search → openAprel). Теперь видно в журнале сервера,
+  на каком шаге спотыкается устройство.
 
 **загрузчик 1.2.1**
 

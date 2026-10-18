@@ -4,7 +4,7 @@
   if (window.kino_online_plugin) return;
   window.kino_online_plugin = true;
 
-  var VERSION = '2.2.2';
+  var VERSION = '2.2.3';
 
   /* -------------------------------------------------------------------- */
   /* Источник 1 — HDrezka через свой серверный экстрактор.                 */
@@ -21,6 +21,35 @@
     'https://lampa-anime-proxy.rammthaok.workers.dev/kino/' + EXTRACTOR_TOKEN
   ];
   var EXTRACTOR = EXTRACTORS[0];
+
+  /* Журнал на сервере: что делает плагин на устройстве (fetch + маяк). */
+  function report(kind, message) {
+    var text = String(message == null ? '' : message).slice(0, 900);
+    var url = EXTRACTORS[0] + '/log?kind=' + encodeURIComponent(kind) + '&msg=' + encodeURIComponent(text);
+    try {
+      if (window.fetch) window.fetch(url, { mode: 'no-cors', cache: 'no-store' }).catch(function () { });
+    } catch (error) { /* пробуем маяком ниже */ }
+    try {
+      var image = new Image();
+      image.src = url + '&beacon=' + Date.now();
+    } catch (error) { /* журнал не должен мешать просмотру */ }
+  }
+
+  function deviceLine() {
+    var agent = (typeof navigator !== 'undefined' && navigator.userAgent) || 'без UA';
+    return 'кино-плагин ' + VERSION + ' | UA ' + agent.slice(0, 130);
+  }
+
+  /* Глобальный перехват ошибок: иначе падения видим только на скриншотах. */
+  try {
+    window.addEventListener('error', function (event) {
+      report('js-error', (event && event.message) + ' @ ' + (event && event.filename) + ':' + (event && event.lineno));
+    });
+    window.addEventListener('unhandledrejection', function (event) {
+      var reason = event && event.reason;
+      report('js-error', 'промис отклонён: ' + ((reason && (reason.message || reason)) || 'без описания'));
+    });
+  } catch (error) { /* старые среды без addEventListener */ }
   var activeExtractor = 0;
 
   /* Источник 2 — запасной: Kinokrad, плеер открывается окном (iframe).    */
@@ -492,6 +521,7 @@
   }
 
   function openAprel(url, title, movie) {
+    report('flow', 'openAprel: ' + title);
     Lampa.Loading.start();
     api('/aprel_stream', { url: url }, function (data) {
       Lampa.Loading.stop();
@@ -505,9 +535,11 @@
 
   function chooseAprel(movie, retried) {
     var query = queryFor(movie);
+    report('flow', 'chooseAprel: запрос «' + query + '», повтор ' + (retried ? 'да' : 'нет'));
     if (!query) return Lampa.Noty.show('Не удалось определить название');
     Lampa.Loading.start();
     api('/aprel_search', { q: query }, function (data) {
+      report('flow', 'aprel_search ответ: ' + (((data && data.items) || []).length) + ' шт.');
       Lampa.Loading.stop();
       var items = (data && data.items) || [];
       if (!items.length) return Lampa.Noty.show('Aprel: ничего не найдено');
@@ -521,6 +553,7 @@
         onSelect: function (choice) { openAprel(choice.url, choice.title, movie); }
       });
     }, function (message) {
+      report('flow', 'aprel_search ошибка: ' + (message || 'без описания'));
       Lampa.Loading.stop();
       Lampa.Noty.show(message || 'Aprel не ответил');
     });
@@ -558,6 +591,7 @@
   }
 
   function openKino(movie) {
+    report('flow', 'openKino: ' + queryFor(movie) || 'без названия');
     if (!queryFor(movie)) return Lampa.Noty.show('Не удалось определить название');
     if (aprelReady()) return askSource(movie);
     checkAprel(function (ready) {
@@ -752,4 +786,5 @@
   checkAprel();
 
   console.log('[Kino Online] loaded', VERSION);
+  report('load', deviceLine());
 })();
